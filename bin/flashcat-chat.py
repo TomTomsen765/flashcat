@@ -501,6 +501,8 @@ def diff_card(title, old, new, context=2, limit=40):
 
 def write_file(path, content):
     full, rel = check_target(path, WRITE_EXT)
+    if content and not content.endswith("\n"):
+        content += "\n"  # text files end with a line break (the model often leaves it out)
     lines = content.splitlines()
     if os.path.exists(full):
         with open(full, encoding="utf-8", errors="replace") as f:
