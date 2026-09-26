@@ -25,6 +25,28 @@ default model, **Gemma 4 26B** (about 15.6 GB), through LM Studio.
 **Requirements:** macOS on Apple Silicon and Apple's command line tools (`xcode-select --install`)
 for Python.
 
+### Prefer to read the code before running it?
+
+Good habit. Download the repository, look at the installer, then run it from there – it then uses
+the files you just read instead of downloading them:
+
+```sh
+git clone https://github.com/TomTomsen765/flashcat.git
+cd flashcat
+less install.sh          # what it does, in about 140 lines
+bash install.sh
+```
+
+What the installer changes on your Mac, and nothing else:
+
+- copies `flashcat`, `flashcat-chat.py` and `flashcat-cleanup` from `bin/` into `~/.local/bin`
+- adds `~/.local/bin` to your `PATH` in `~/.zshrc`, if it isn't there yet
+- installs the Python package `pygments` for colored code (`pip install --user`, optional)
+- downloads the model through LM Studio (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
+
+Flashcat itself is one Python file using only the standard library
+([`bin/flashcat-chat.py`](bin/flashcat-chat.py)) and a short launcher ([`bin/flashcat`](bin/flashcat)).
+
 ### Which Mac?
 
 Flashcat is built and tuned on a **MacBook Air M5 with 24 GB** of memory — that is the sweet spot for
