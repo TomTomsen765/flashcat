@@ -31,8 +31,19 @@ curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.
 The installer checks your Mac, installs the `flashcat` command into `~/.local/bin` and downloads the
 default model, **Gemma 4 26B** (about 15.6 GB), through LM Studio.
 
-**Requirements:** macOS on Apple Silicon, 24 GB memory recommended (16 GB works, but tight),
-Apple's command line tools (`xcode-select --install`) for Python.
+**Requirements:** macOS on Apple Silicon and Apple's command line tools (`xcode-select --install`)
+for Python.
+
+### Which Mac?
+
+Flashcat is built and tuned on a **MacBook Air M5 with 24 GB** of memory — that is the sweet spot for
+the default model (Gemma 4 26B, 64k context).
+
+| Memory | Experience |
+|---|---|
+| **less than 24 GB** | difficult – the model barely fits, answers get slow, close other apps |
+| **24 GB** | good – what Flashcat is optimized for |
+| **more than 24 GB** | great – plenty of room, faster and larger contexts |
 
 ## Use
 
