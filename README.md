@@ -34,10 +34,12 @@ the default model (Gemma 4 26B, 64k context).
 |---|---|
 | **less than 24 GB** | difficult – the model barely fits, answers get slow, close other apps |
 | **24 GB** | good – what Flashcat is optimized for |
-| **more than 24 GB** | great – plenty of room, faster and larger contexts |
+| **more than 24 GB** | great – plenty of room for other apps and larger contexts |
 
-It runs on any Apple Silicon Mac – **MacBook Air, MacBook Pro, Mac mini, iMac, Mac Studio and Mac Pro**
-with M1, M2, M3, M4 or M5 chips – as long as there is enough memory.
+It should run on any Apple Silicon Mac (M1 or newer) with enough memory, but **older chips are
+untested** – expect slower answers, since speed depends mostly on the chip, not on Flashcat. Most
+base M1 and M2 models have at most 16 GB, which is too little for the default model. If you try it
+on another Mac, please [let me know](https://github.com/TomTomsen765/flashcat/issues) how it runs.
 
 ## Use
 
