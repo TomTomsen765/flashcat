@@ -169,6 +169,10 @@ TOOLS = [
 ]
 
 
+def plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
 # ---------- reading ----------
 
 def resolve(path):
@@ -188,7 +192,7 @@ def list_dir(path="."):
             lines.append(name + "/")
         else:
             try:
-                lines.append(f"{name}  ({os.path.getsize(p)} Bytes)")
+                lines.append(f"{name}  ({plural(os.path.getsize(p), 'byte')})")
             except OSError:
                 lines.append(name)
     return "\n".join(lines) or "(empty)"
@@ -209,7 +213,15 @@ function recognize(cgimage, url) {
   var req = $.VNRecognizeTextRequest.alloc.init;
   req.recognitionLevel = 0;
   req.usesLanguageCorrection = true;
-  req.recognitionLanguages = $(["de-DE", "en-US"]);
+  // the user's languages (from macOS settings) that text recognition supports, English as fallback
+  var supported = ObjC.deepUnwrap(req.supportedRecognitionLanguagesAndReturnError($())) || [];
+  var wanted = ObjC.deepUnwrap($.NSLocale.preferredLanguages).concat(["en-US"]), langs = [];
+  wanted.forEach(function (w) {
+    supported.forEach(function (s) {
+      if (s.split("-")[0] == w.split("-")[0] && langs.indexOf(s) < 0) langs.push(s);
+    });
+  });
+  req.recognitionLanguages = $(langs.length ? langs : ["en-US"]);
   handler.performRequestsError($([req]), $());
   var out = [], res = req.results;
   for (var i = 0; i < res.count; i++) out.push(res.objectAtIndex(i).topCandidates(1).objectAtIndex(0).string.js);
@@ -243,7 +255,7 @@ def ocr(full):
         target = full
         if not full.lower().endswith(".pdf"):
             # JPEG flattens transparency, which otherwise hides dark text on a transparent background
-            target = os.path.join(tmp, "bild.jpg")
+            target = os.path.join(tmp, "image.jpg")
             subprocess.run(["sips", "-s", "format", "jpeg", full, "--out", target],
                            capture_output=True, timeout=60, check=True)
         return subprocess.run(["osascript", "-l", "JavaScript", "-e", OCR_JXA, target, str(OCR_MAX_PAGES)],
@@ -468,7 +480,7 @@ def preview(title, lines, limit=20):
     body = [f"{GREEN}▌{RESET}{DIM}{n:>4}{RESET}  {clean(line)[:width]}" for n, line in enumerate(lines[:limit], 1)]
     cut = limit is not None and len(lines) > limit
     if cut:
-        body.append(f"{DIM}      … {len(lines) - limit} more lines (A shows all){RESET}")
+        body.append(f"{DIM}      … {plural(len(lines) - limit, 'more line')} (A shows all){RESET}")
     print()
     print(card(f"{ORANGE}{clean(title)}{RESET}", body or [f"{DIM}(empty){RESET}"]))
     return (lambda: preview(title, lines, limit=None)) if cut else None
@@ -493,7 +505,7 @@ def diff_card(title, old, new, context=2, limit=40):
             body += [f"{GREEN}▌{RESET}{DIM}{j + 1:>4}{RESET}  {GREEN}{b[j][:width]}{RESET}" for j in range(j1, j2)]
     cut = limit is not None and len(body) > limit
     if cut:
-        body = body[:limit] + [f"{DIM}      … {len(body) - limit} more lines (A shows all){RESET}"]
+        body = body[:limit] + [f"{DIM}      … {plural(len(body) - limit, 'more line')} (A shows all){RESET}"]
     print()
     print(card(f"{ORANGE}{clean(title)}{RESET}", body or [f"{DIM}(no change){RESET}"]))
     return (lambda: diff_card(title, old, new, context, limit=None)) if cut else None
@@ -508,7 +520,7 @@ def write_file(path, content):
         with open(full, encoding="utf-8", errors="replace") as f:
             show_all = diff_card(f"overwrites {rel}", f.read(), content)
     else:
-        show_all = preview(f"new file {rel} · {len(lines)} lines", lines)
+        show_all = preview(f"new file {rel} · {plural(len(lines), 'line')}", lines)
     if not confirm("Write?", show_all):
         print()
         return "The user declined writing. The file was not changed."
@@ -584,7 +596,7 @@ def write_docx(path, content):
         print()
         return "The user declined. No document was created."
     with tempfile.TemporaryDirectory() as tmp:
-        src, out = os.path.join(tmp, "dok.html"), os.path.join(tmp, "dok.docx")
+        src, out = os.path.join(tmp, "doc.html"), os.path.join(tmp, "doc.docx")
         with open(src, "w", encoding="utf-8") as f:
             f.write(markdown_to_html(content))
         subprocess.run(["textutil", "-convert", "docx", src, "-output", out],
@@ -625,7 +637,7 @@ def write_pdf(path, content):
         print()
         return "The user declined. No PDF was created."
     with tempfile.TemporaryDirectory() as tmp:
-        src, out = os.path.join(tmp, "dok.html"), os.path.join(tmp, "dok.pdf")
+        src, out = os.path.join(tmp, "doc.html"), os.path.join(tmp, "doc.pdf")
         with open(src, "w", encoding="utf-8") as f:
             f.write(markdown_to_html(content, plain_lists=True))
         subprocess.run(["osascript", "-l", "JavaScript", "-e", HTML2PDF_JXA, src, out],
@@ -706,7 +718,7 @@ pending_images = []  # (rel path, data URL) queued by view_image, sent to the mo
 
 def image_data_url(full):
     with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "bild.jpg")
+        out = os.path.join(tmp, "image.jpg")
         # scale down to max 1024 px and convert to JPEG (handles HEIC etc.)
         subprocess.run(["sips", "-s", "format", "jpeg", "-Z", "1024", full, "--out", out],
                        capture_output=True, timeout=60, check=True)
@@ -820,9 +832,9 @@ def strip_tags(s):
 def web_search(query):
     if not confirm_web("DuckDuckGo search", query):
         return WEB_DENIED
-    # DuckDuckGo answers GET requests from scripts with a bot check, POST works
+    # DuckDuckGo answers GET requests from scripts with a bot check, POST works; kl=wt-wt: worldwide, no region
     _, page = http_get("https://html.duckduckgo.com/html/", timeout=20,
-                       data=urllib.parse.urlencode({"q": query, "kl": "de-de"}).encode())
+                       data=urllib.parse.urlencode({"q": query, "kl": "wt-wt"}).encode())
     links = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
     snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', page, re.S)
     results = []
@@ -925,7 +937,7 @@ def card(title, lines, color=None):
     return "\n".join(out)
 
 
-def de_num(x, digits=1):
+def fmt_num(x, digits=1):
     return f"{x:.{digits}f}"
 
 
@@ -1085,6 +1097,7 @@ class MarkdownStream:
         quote = re.match(r"^\s*>\s?(.*)", line)
         if quote:
             return f"{DIM}│{RESET} {ITALIC}{self._inline(quote.group(1))}{RESET}", 2
+        # the model answers in the user's language, so German warning words are recognized too
         warning = re.match(r"^\s*(?:⚠️?\s*|\**(?:Warning|Important|Caution|Note|Achtung|Warnung|Wichtig|Vorsicht)\b)", line)
         if warning:
             return f"{ORANGE}!{RESET} {self._inline(line.strip().lstrip('⚠️').strip())}", 2
@@ -1308,7 +1321,7 @@ def run_tool(call):
     room = max(10, term_width() - len(verb) - 22)
     short = raw if len(raw) <= room else raw[: room - 1] + "…"
     if name in ("search", "web_search"):
-        target = f"„{short}“"
+        target = f"“{short}”"
     elif name == "fetch_url":
         target = urllib.parse.urlparse(raw).netloc or short
     elif raw == ".":
@@ -1333,7 +1346,7 @@ def run_tool(call):
     elif "declined" in result:
         status = f"{YELLOW}✗ declined{RESET}"
     else:
-        status = f"{GREEN}✓{RESET} {DIM}{de_num(time.time() - started)} s{RESET}"
+        status = f"{GREEN}✓{RESET} {DIM}{fmt_num(time.time() - started)} s{RESET}"
     if tool_line["open"]:
         pad = max(2, term_width() - visible_len(text) - visible_len(status) - 2)
         print(" " * pad + status)
@@ -1345,13 +1358,48 @@ def run_tool(call):
 
 # ---------- sessions, instructions, context ----------
 
+TRUSTED_FILE = os.path.join(HOME_DIR, "trusted-instructions.json")
+
+
+def folder_instructions_trusted(path, content):
+    """A FLASHCAT.md in the start folder may come from someone else (e.g. a downloaded project) and could steer
+    the model. It is shown and only loaded after the user's OK - the first time, and again whenever it changed."""
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    try:
+        with open(TRUSTED_FILE, encoding="utf-8") as f:
+            trusted = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        trusted = {}
+    if trusted.get(path) == digest:
+        return True
+    print(f"\n  {ORANGE}!{RESET} This folder has instructions for Flashcat {DIM}(new or changed since last time){RESET}")
+    show_all = preview(f"{os.path.relpath(path, ROOT)} · {plural(len(content.splitlines()), 'line')}", content.splitlines())
+    print(f"  {DIM}Only load instructions you wrote yourself or trust – they steer every answer.{RESET}")
+    if not confirm("Load these instructions?", show_all):
+        print(f"  {DIM}not loaded – you will be asked again next time{RESET}\n")
+        return False
+    trusted[path] = digest
+    with open(TRUSTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(trusted, f, indent=1)
+    print()
+    return True
+
+
 def system_prompt():
     text, loaded = SYSTEM, []
     candidates = [("global", os.path.join(HOME_DIR, "FLASHCAT.md")), ("folder", os.path.join(ROOT, "FLASHCAT.md"))]
     for label, p in candidates:
+        if label == "folder":
+            try:
+                p = resolve("FLASHCAT.md")  # a link to a file outside the folder is not followed
+            except ValueError:
+                continue
         if os.path.isfile(p):
             with open(p, encoding="utf-8", errors="replace") as f:
-                text += f"\n\nInstructions from the user ({label}, from {p}):\n" + f.read()[:20_000]
+                content = f.read()[:20_000]
+            if label == "folder" and not folder_instructions_trusted(p, content):
+                continue
+            text += f"\n\nInstructions from the user ({label}, from {p}):\n" + content
             loaded.append(p)
     return text, loaded
 
@@ -1427,7 +1475,7 @@ def show_context():
     bar = f"{color}{'▰' * filled}{RESET}{DIM}{'▱' * (10 - filled)}"
     info = f" {round(pct * 100)}%"
     if state["turn_start"]:
-        info += f" · {de_num(time.time() - state['turn_start'])} s"
+        info += f" · {fmt_num(time.time() - state['turn_start'])} s"
         if state["tok_s"]:
             info += f" · {state['tok_s']:.0f} Tok/s"
     print(right_aligned(f"{bar}{info}{RESET}"))

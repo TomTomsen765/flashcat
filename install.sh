@@ -6,6 +6,8 @@
 # Installs flashcat into ~/.local/bin and downloads the default model (Gemma 4 26B, ~15.6 GB) through
 # LM Studio. LM Studio itself must be installed first: https://lmstudio.ai
 # Options (environment variables): FLASHCAT_SKIP_MODEL=1 skips the model download.
+{ # everything in braces: bash reads it completely before running it, so a download that
+  # breaks off in the middle runs nothing instead of half the script
 set -euo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/TomTomsen765/flashcat/main"
@@ -134,3 +136,4 @@ if [[ -n ${path_hint:-} ]]; then
   note "Open a new terminal window first (or run: source ~/.zshrc) so the flashcat command is found."
   echo
 fi
+}

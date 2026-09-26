@@ -2,6 +2,8 @@
 # Removes Flashcat. Keeps LM Studio and downloaded models; asks before deleting saved chats.
 #
 #   curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/uninstall.sh | bash
+{ # everything in braces: bash reads it completely before running it, so a download that
+  # breaks off in the middle runs nothing instead of half the script
 set -euo pipefail
 BIN="$HOME/.local/bin"
 DIM=$'\033[2m' GREEN=$'\033[32m' ORANGE=$'\033[1;38;2;217;119;87m' RESET=$'\033[0m'
@@ -22,3 +24,4 @@ if [[ -d $HOME/.flashcat ]]; then
   fi
 fi
 printf '  %sLM Studio and the downloaded model stay. Delete the model in LM Studio if you no longer need it.%s\n' "$DIM" "$RESET"
+}

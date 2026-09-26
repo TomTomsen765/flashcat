@@ -74,7 +74,8 @@ Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat
 `flashcat --update`.
 
 Put standing instructions into a `FLASHCAT.md` in your project folder (or `~/.flashcat/FLASHCAT.md`
-for all folders).
+for all folders). A folder's `FLASHCAT.md` is shown and only loaded after you agree – the first time
+and whenever it changes.
 
 ### Settings
 
@@ -108,6 +109,8 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   computer or local network are always blocked.
 - It cannot delete files or run commands.
 - Starting it in your home folder shows a warning first.
+- Instructions in a folder's `FLASHCAT.md` (e.g. in a downloaded project) are only used after you
+  read and allow them.
 
 The model runs locally; LM Studio is loaded when Flashcat starts and unloaded again when the last
 Flashcat window closes, so the memory is freed.
