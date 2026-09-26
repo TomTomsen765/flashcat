@@ -4,7 +4,7 @@
 
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
-the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai).
+the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai) or LM Studio Bionic.
 Nothing you ask leaves your computer unless you allow a web request: a private, offline AI chat for your
 MacBook, powered by a local LLM (Google Gemma 4).
 
@@ -12,7 +12,10 @@ Named after Flash, my cat. 🐈
 
 ## Install
 
-1. Install **[LM Studio](https://lmstudio.ai)** and open it once.
+1. Install **[LM Studio](https://lmstudio.ai/download)** or its newer agent app
+   **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** (both on the
+   [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
+   `lms` command and the local server that Flashcat uses, and they can be installed side by side.
 2. Run this in the terminal:
 
 ```sh
