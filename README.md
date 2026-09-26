@@ -108,7 +108,11 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 - **Every** web request asks first and shows the exact address or search term. Addresses on your own
   computer or local network are always blocked.
 - It cannot delete files or run commands.
-- Starting it in your home folder shows a warning first.
+- Private data is blocked, even when started in the home folder: everything hidden directly in
+  your home folder (`~/.ssh`, `~/.zshrc`, `~/.config`, shell history, …), `~/Library` (keychains,
+  browser data, mail, messages) and private key files (`id_rsa`, `*.pem`, …). If you really need
+  one of them, Flashcat asks first – in red – and unlocks only that item, only for the current chat.
+- Starting it in your home folder asks first – before the model is loaded.
 - Instructions in a folder's `FLASHCAT.md` (e.g. in a downloaded project) are only used after you
   read and allow them.
 

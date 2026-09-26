@@ -83,7 +83,9 @@ SYSTEM = (
     "IMPORTANT: The writing and internet tools ask the user for confirmation themselves. "
     "So NEVER ask in the chat 'Shall I …?', but call the right tool right away "
     "as soon as the user wants something written, changed or moved. "
-    "You cannot delete anything or run commands."
+    "You cannot delete anything or run commands. "
+    "Private data (hidden settings and keys in the home folder, ~/Library, key files) is blocked; only access it "
+    "when the user explicitly asks for it - the user is then asked to allow it."
 )
 
 TOOLS = [
@@ -91,7 +93,9 @@ TOOLS = [
         "name": "list_dir",
         "description": "Lists the files and subfolders of a folder.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Relative path, '.' for the start folder"}}}}},
+            "path": {"type": "string", "description": "Relative path, '.' for the start folder"},
+            "show_private": {"type": "boolean", "description": "Also list private items (hidden settings, keys, "
+                             "~/Library). Only when the user explicitly asks; the user must allow it."}}}}},
     {"type": "function", "function": {
         "name": "read_file",
         "description": "Reads a file: text, PDF, Word (docx/doc/rtf/odt) or Excel (xlsx). Scanned PDFs and images are read via text recognition.",
@@ -175,18 +179,99 @@ def plural(n, word):
 
 # ---------- reading ----------
 
-def resolve(path):
+HOME = os.path.realpath(os.path.expanduser("~"))
+# private data: everything hidden directly in the home folder (~/.ssh, ~/.zshrc, ~/.config, … - settings, keys,
+# tokens, history) and ~/Library (keychains, browser data, mail, messages). Blocked even when Flashcat is started in
+# the home folder itself, unless it was started inside one of them on purpose.
+PRIVATE_NAME = re.compile(r"(id_(rsa|dsa|ecdsa|ed25519)(_sk)?|.*\.(pem|p12|pfx|keychain|keychain-db)|\.netrc|"
+                          r"\.git-credentials)", re.IGNORECASE)  # private keys and credential files, wherever they are
+
+
+def inside(path, folder):
+    return path == folder or path.startswith(folder + os.sep)
+
+
+private_ok = set()  # private items the user unlocked in this chat
+
+
+def private_item(full):
+    """The private item `full` belongs to - a key file, or the hidden file/folder in ~ or ~/Library - or None."""
+    if PRIVATE_NAME.fullmatch(os.path.basename(full)):
+        return full
+    if full == HOME or not inside(full, HOME):
+        return None
+    top = os.path.join(HOME, os.path.relpath(full, HOME).split(os.sep)[0])
+    name = os.path.basename(top)
+    return top if (name.startswith(".") or name == "Library") and not inside(ROOT, top) else None
+
+
+def locked(full):
+    item = private_item(full)
+    return item is not None and item not in private_ok
+
+
+def confirm_private(item, what="Allow access for this chat?"):
+    """Red card: asks the user to unlock a private item for the rest of this chat."""
+    ui_break()
+    print()
+    print(card(f"{RED}! Private data{RESET}", [
+        f"{RED}{clean(item.replace(HOME, '~', 1))}{RESET}",
+        f"{RED}Can contain keys, passwords, tokens or private messages.{RESET}",
+        f"{RED}Only allow it if you asked for it yourself –{RESET}",
+        f"{RED}a document or web page could have tricked the model.{RESET}"], color=RED))
+    try:
+        answer = input(f"  {RED}? {what} [Y/N]{RESET} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    return answer in ("y", "yes")
+
+
+PRIVATE_REFUSED = ("Refused: this is private data (keys, passwords, history, ~/Library). It can only be accessed "
+                   "when the user asks for it and allows it.")
+
+
+def resolve(path, ask=False):
+    """Absolute path inside the start folder. Private data is refused unless unlocked; with ask=True (a tool or the
+    user accesses exactly this path) the user is asked to unlock it."""
     full = os.path.realpath(os.path.join(ROOT, path or "."))
-    if full != ROOT and not full.startswith(ROOT + os.sep):
+    if not inside(full, ROOT):
         raise ValueError("Access outside the start folder is not allowed.")
+    if locked(full):
+        if not (ask and confirm_private(private_item(full))):
+            raise ValueError(PRIVATE_REFUSED)
+        private_ok.add(private_item(full))
+        print(f"  {RED}✓ {clean(private_item(full).replace(HOME, '~', 1))} unlocked for this chat{RESET}")
     return full
 
 
-def list_dir(path="."):
-    full = resolve(path)
+def allowed(full):
+    """True if `full` (a path found while walking a folder) may be accessed without asking."""
+    try:
+        resolve(full)
+        return True
+    except ValueError:
+        return False
+
+
+def list_dir(path=".", show_private=False):
+    full = resolve(path, ask=True)
     entries = sorted(os.listdir(full), key=lambda n: (not os.path.isdir(os.path.join(full, n)), n.lower()))
+    hidden = [n for n in entries if not allowed(os.path.join(full, n))]
+    private = [n for n in hidden if inside(os.path.realpath(os.path.join(full, n)), ROOT)]  # not links outside
+    if show_private and private:
+        rel = os.path.relpath(full, ROOT)
+        if confirm_private(f"{plural(len(private), 'private item')} in {'the start folder' if rel == '.' else rel}",
+                           "Show their names (not their contents)?"):
+            hidden = [n for n in hidden if n not in private]
+        else:
+            return "The user declined showing the private items."
     lines = []
     for name in entries:
+        if name in hidden:
+            continue
+        if name in private:
+            lines.append(f"{name}{'/' if os.path.isdir(os.path.join(full, name)) else ''}  (private – opening it asks the user)")
+            continue
         p = os.path.join(full, name)
         if os.path.isdir(p):
             lines.append(name + "/")
@@ -195,6 +280,9 @@ def list_dir(path="."):
                 lines.append(f"{name}  ({plural(os.path.getsize(p), 'byte')})")
             except OSError:
                 lines.append(name)
+    if hidden:
+        lines.append(f"({plural(len(hidden), 'item')} not shown: private data or links outside the folder. "
+                     "Only if the user asks for them: list_dir with show_private=true.)")
     return "\n".join(lines) or "(empty)"
 
 
@@ -350,7 +438,7 @@ def extract_text(full, allow_ocr=True):
 
 
 def read_file(path):
-    full = resolve(path)
+    full = resolve(path, ask=True)
     text = extract_text(full)
     if text is not None:
         if not text:
@@ -371,10 +459,13 @@ def read_file(path):
 def search(pattern, path="."):
     rx = re.compile(pattern, re.IGNORECASE)
     hits, docs = [], 0
-    for dirpath, dirnames, filenames in os.walk(resolve(path)):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+    for dirpath, dirnames, filenames in os.walk(resolve(path, ask=True)):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
+                       and allowed(os.path.join(dirpath, d))]
         for name in filenames:
             p = os.path.join(dirpath, name)
+            if not allowed(p):  # private data, or a link to a file outside the folder
+                continue
             ext = os.path.splitext(name)[1].lower()
             label = ""
             try:
@@ -409,7 +500,7 @@ journal = []  # changes made in this chat, newest last; used by /undo
 
 def check_target(path, allowed_ext):
     """Returns (full, rel) for a file that may be written, or raises ValueError with a refusal reason."""
-    full = resolve(path)
+    full = resolve(path, ask=True)
     rel = os.path.relpath(full, ROOT)
     if os.path.splitext(full)[1].lower() not in allowed_ext:
         raise ValueError(f"Refused: only {', '.join(sorted(allowed_ext))} are allowed.")
@@ -648,12 +739,12 @@ def write_pdf(path, content):
 
 
 def move_file(source, destination):
-    src = resolve(source)
+    src = resolve(source, ask=True)
     if src == ROOT:
         return "Refused: the start folder itself cannot be moved."
     if not os.path.exists(src):
         return f"Error: {source} does not exist."
-    dst = resolve(destination)
+    dst = resolve(destination, ask=True)
     if os.path.isdir(dst):
         dst = os.path.join(dst, os.path.basename(src))
     src_rel, dst_rel = clean(os.path.relpath(src, ROOT)), clean(os.path.relpath(dst, ROOT))
@@ -727,7 +818,7 @@ def image_data_url(full):
 
 
 def view_image(path):
-    full = resolve(path)
+    full = resolve(path, ask=True)
     rel = os.path.relpath(full, ROOT)
     if os.path.splitext(full)[1].lower() not in IMAGE_EXT:
         return "Error: this is not a supported image file."
@@ -1329,6 +1420,8 @@ def run_tool(call):
     else:
         target = link(short, os.path.join(ROOT, raw)) if os.path.exists(os.path.join(ROOT, raw)) else short
     text = f"  {DIM}◇{RESET} {verb} {target}"
+    if name not in ("search", "web_search", "fetch_url") and private_item(os.path.realpath(os.path.join(ROOT, raw))):
+        text = f"  {RED}◇ {verb} {short} · private{RESET}"
     print(text, end="", flush=True)
     tool_line.update(open=True, text=text)
     state["tools_shown"] = True
@@ -1649,6 +1742,8 @@ def complete(text, i):
         except (OSError, ValueError):
             names = []
         for n in names:
+            if not allowed(os.path.join(ROOT, folder, n)):
+                continue
             if n.startswith(prefix) and (prefix.startswith(".") or not n.startswith(".")):
                 p = os.path.join(folder, n)
                 if os.path.isdir(os.path.join(ROOT, p)):
@@ -1680,9 +1775,12 @@ def attach_mentions(text):
         name = m.group(1) or m.group(2)
         candidates = [name] if m.group(1) else [name, name.rstrip(".,;:!?)")]
         for cand in candidates:
+            if not os.path.isfile(os.path.join(ROOT, cand)):
+                continue
             try:
-                full = resolve(cand)
-            except ValueError:
+                full = resolve(cand, ask=True)
+            except ValueError as e:
+                print(f"  {RED}✗{RESET} {clean(cand)} {DIM}not attached: {e}{RESET}")
                 break
             if os.path.isfile(full):
                 rel = os.path.relpath(full, ROOT)
@@ -1832,22 +1930,30 @@ def handle_command(user, messages):
     return messages
 
 
-BROAD_FOLDERS = {"/", "/Users", "/Volumes", os.path.realpath(os.path.expanduser("~"))}
+BROAD_FOLDERS = {"/", "/Users", "/Volumes", HOME}
+
+
+def confirm_broad_folder():
+    """True if Flashcat may start in this folder; in very broad folders (home, /, …) the user is asked first.
+    The launcher calls this (flashcat-chat.py --confirm-folder) before it loads the model."""
+    if ROOT not in BROAD_FOLDERS:
+        return True
+    print(card(f"{ORANGE}! Warning{RESET}", [
+        f"Here Flashcat would have access to {BOLD}all{RESET} your documents, photos and downloads in {ROOT}.",
+        f"{DIM}Keys, passwords, shell history and ~/Library stay blocked unless you allow them.{RESET}",
+        f"{DIM}Better: first change into a project folder, e.g. cd ~/Documents/my-project{RESET}"]))
+    try:
+        return input(f"  {ORANGE}?{RESET} Start here anyway? {DIM}[Y/N]{RESET} ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
 
 
 def main():
     os.makedirs(HOME_DIR, exist_ok=True)
     os.chmod(HOME_DIR, 0o700)  # saved chats contain file contents; other accounts on this Mac must not read them
-    if ROOT in BROAD_FOLDERS:
-        print(card(f"{ORANGE}! Warning{RESET}", [
-            f"Here Flashcat would have access to {BOLD}all{RESET} files in {ROOT},",
-            "including keys, passwords and private documents.",
-            f"{DIM}Better: first change into a project folder, e.g. cd ~/Documents/my-project{RESET}"]))
-        try:
-            if input(f"  {ORANGE}?{RESET} Start here anyway? {DIM}[Y/N]{RESET} ").strip().lower() not in ("y", "yes"):
-                return
-        except (EOFError, KeyboardInterrupt):
-            return
+    if not os.environ.get("FLASHCAT_FOLDER_CONFIRMED") and not confirm_broad_folder():
+        return
     setup_completion()
     system, loaded = system_prompt()
     messages = [{"role": "system", "content": system}]
@@ -1934,4 +2040,6 @@ def chat_loop(messages):
 
 
 if __name__ == "__main__":
+    if MODEL == "--confirm-folder":
+        sys.exit(0 if confirm_broad_folder() else 1)
     main()

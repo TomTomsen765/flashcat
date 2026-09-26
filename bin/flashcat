@@ -21,6 +21,12 @@ if [[ $1 == --update ]]; then
   exec /bin/bash -c "$installer"
 fi
 
+# in very broad folders (home, /, …) ask before anything is loaded
+if [[ $1 != --models ]]; then
+  /usr/bin/python3 ~/.local/bin/flashcat-chat.py --confirm-folder || exit 0
+  export FLASHCAT_FOLDER_CONFIRMED=1
+fi
+
 mkdir -p $STATE
 # Was LM Studio running before? (checked before the first lms call, which starts its background service)
 if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
