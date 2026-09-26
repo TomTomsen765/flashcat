@@ -33,6 +33,7 @@ import termios
 import threading
 import time
 import tty
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -43,7 +44,8 @@ try:
 except ImportError:
     pass
 
-SERVER = "http://localhost:1234"
+SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or 1234}"
+API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
 URL = SERVER + "/v1/chat/completions"
 MODEL = sys.argv[1]
 NAME = "Flashcat"
@@ -1148,7 +1150,10 @@ def call_model(messages, tools=True, show=True):
         payload["tools"] = TOOLS
     if not state["thinking"]:
         payload["reasoning_effort"] = "none"
-    req = urllib.request.Request(URL, json.dumps(payload).encode(), {"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    req = urllib.request.Request(URL, json.dumps(payload).encode(), headers)
     done = threading.Event()
     spinner = threading.Thread(target=spin, args=(done,), daemon=True)
     if sys.stdout.isatty():
@@ -1210,6 +1215,11 @@ def call_model(messages, tools=True, show=True):
                             c["function"]["name"] += fn.get("name") or ""
                             c["function"]["arguments"] += fn.get("arguments") or ""
                 break
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    raise RuntimeError("LM Studio requires an API key. Turn off \"Require authentication\" in "
+                                       "LM Studio's server settings, or start with FLASHCAT_API_KEY=<key> flashcat") from None
+                raise
             except (http.client.RemoteDisconnected, ConnectionResetError):
                 if attempt or content or calls:
                     raise

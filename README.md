@@ -70,11 +70,23 @@ Then just talk to it:
 | `Esc` | cancel the current answer |
 | `@file` | attach a file to your message (Tab completes) |
 
-Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
-`FLASHCAT_CONTEXT=32768 flashcat` (smaller context, less memory).
+Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`.
 
 Put standing instructions into a `FLASHCAT.md` in your project folder (or `~/.flashcat/FLASHCAT.md`
 for all folders).
+
+### Settings
+
+| Environment variable | |
+|---|---|
+| `FLASHCAT_CONTEXT` | context size in tokens – default 65536 on Macs with 24 GB or more, 16384 below |
+| `FLASHCAT_API_KEY` | only needed if you turned on *Require authentication* in LM Studio's server settings |
+
+Flashcat uses the port set in LM Studio's server settings automatically.
+Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
+
+**Update:** run the install command again. **Troubleshooting:** open LM Studio once, check that the
+model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
 
 ## What it can do
 

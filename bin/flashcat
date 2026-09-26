@@ -64,9 +64,18 @@ if ! $LMS server status 2>&1 | grep -q "is running"; then
   touch $STATE/server
 fi
 
+# the port LM Studio's server uses (1234 unless changed in LM Studio)
+export FLASHCAT_PORT=$($LMS server status --json 2>/dev/null | /usr/bin/python3 -c \
+  'import json, sys; print(json.load(sys.stdin).get("port") or 1234)' 2>/dev/null || echo 1234)
+
+# context window: 64k on Macs with 24 GB or more, 16k below (can be set with FLASHCAT_CONTEXT)
+if [[ -z ${FLASHCAT_CONTEXT:-} ]]; then
+  if (( $(sysctl -n hw.memsize) >= 24 * 1073741824 )); then FLASHCAT_CONTEXT=65536; else FLASHCAT_CONTEXT=16384; fi
+fi
+
 if ! $LMS ps 2>/dev/null | grep -q "^$MODEL "; then
   echo "Loading $MODEL …"
-  if ! $LMS load $MODEL --context-length ${FLASHCAT_CONTEXT:-65536} --parallel 1 -y >/dev/null 2>&1; then
+  if ! $LMS load $MODEL --context-length $FLASHCAT_CONTEXT --parallel 1 -y >/dev/null 2>&1; then
     echo "Loading failed." >&2
     kill $watchdog_pid 2>/dev/null
     ~/.local/bin/flashcat-cleanup $$
