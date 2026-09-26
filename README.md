@@ -1,16 +1,6 @@
 # Flashcat
 
-```
-      /\_/\
-     ( o.o )
-      > ^ <
-  ╭──────────────────────────────────────────────────────╮
-  │ ✻ Flashcat                           local · private │
-  │ Gemma 4 · 26B · 64k context                          │
-  │ ~/Documents/my-project                               │
-  │ /help for commands                                   │
-  ╰──────────────────────────────────────────────────────╯
-```
+<p align="center"><img src="docs/screenshot.svg" alt="Flashcat in the terminal: it reads costs.csv and notes.md and answers with a table and a budget check" width="760"></p>
 
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
