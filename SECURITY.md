@@ -22,4 +22,4 @@ Anything that breaks Flashcat's safety promises, for example:
 
 ## Supported versions
 
-Only the latest version on the `main` branch is supported. Update by running the install command again.
+Only the latest version on the `main` branch is supported. Update with `flashcat --update`.

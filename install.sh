@@ -127,6 +127,8 @@ cat <<EOF
       ${ORANGE}cd ~/Documents/my-project${RESET}
       ${ORANGE}flashcat${RESET}
 
+  ${DIM}Update later with:  flashcat --update${RESET}
+
 EOF
 if [[ -n ${path_hint:-} ]]; then
   note "Open a new terminal window first (or run: source ~/.zshrc) so the flashcat command is found."
