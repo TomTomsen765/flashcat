@@ -6,7 +6,7 @@ Named after Flash the cat.
 Tools: list, read (text/PDF/Word/Excel, scans via macOS text recognition), search, write + edit (text
 files), write Word and PDF documents, move/rename, view images, fetch web pages, web search. Every change is confirmed by the
 user, backed up and can be undone with /undo. File access is sandboxed to the folder the chat was
-started in. Talks to LM Studio's OpenAI-compatible server on localhost:1234. Stdlib only.
+started in. Talks to LM Studio's OpenAI-compatible server on localhost (port from FLASHCAT_PORT). Stdlib only.
 
 Usage: flashcat-chat.py MODEL [--continue]
 """
@@ -137,7 +137,7 @@ TOOLS = [
                        "The user confirms first.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "Relative path, ending in .pdf"},
-            "content": {"type": "string", "description": "Dokumentinhalt als einfacher Markdown-Text"}},
+            "content": {"type": "string", "description": "Document content as simple Markdown"}},
             "required": ["path", "content"]}}},
     {"type": "function", "function": {
         "name": "move_file",
@@ -191,7 +191,7 @@ def list_dir(path="."):
                 lines.append(f"{name}  ({os.path.getsize(p)} Bytes)")
             except OSError:
                 lines.append(name)
-    return "\n".join(lines) or "(leer)"
+    return "\n".join(lines) or "(empty)"
 
 
 PDF_JXA = (
@@ -302,7 +302,7 @@ def read_xlsx(full, max_rows=3000):
                     elif kind == "inlineStr":
                         val = "".join(t.text or "" for t in c.iter(XLSX_NS + "t"))
                     elif kind == "b":
-                        val = "WAHR" if v is not None and v.text == "1" else "FALSCH"
+                        val = "TRUE" if v is not None and v.text == "1" else "FALSE"
                     else:
                         val = v.text if v is not None and v.text else ""
                         if val and int(c.get("s", -1)) in date_styles:
@@ -423,7 +423,15 @@ def confirm(question):
 def backup_copy(full, rel, suffix="bak", move=False):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = os.path.join(ROOT, BACKUP_DIR, f"{rel}.{stamp}.{suffix}")
-    os.makedirs(os.path.dirname(backup), exist_ok=True)
+    folder = os.path.dirname(backup)
+    if os.path.realpath(folder) != os.path.normpath(folder):
+        # e.g. a downloaded project that ships .flashcat-backup as a link to another folder
+        raise ValueError(f"Refused: {BACKUP_DIR} contains a symbolic link.")
+    os.makedirs(folder, exist_ok=True)
+    ignore = os.path.join(ROOT, BACKUP_DIR, ".gitignore")
+    if not os.path.lexists(ignore):  # backups may hold private old versions: never commit them by accident
+        with open(ignore, "w") as f:
+            f.write("*\n")
     (shutil.move if move else shutil.copy2)(full, backup)
     return backup
 
@@ -621,7 +629,7 @@ def move_file(source, destination):
     dst = resolve(destination)
     if os.path.isdir(dst):
         dst = os.path.join(dst, os.path.basename(src))
-    src_rel, dst_rel = os.path.relpath(src, ROOT), os.path.relpath(dst, ROOT)
+    src_rel, dst_rel = clean(os.path.relpath(src, ROOT)), clean(os.path.relpath(dst, ROOT))
     if BACKUP_DIR in (src_rel.split(os.sep)[0], dst_rel.split(os.sep)[0]):
         return "Refused: the backup folder is off limits."
     if os.path.exists(dst):
@@ -652,9 +660,9 @@ def undo():
     if e["type"] == "move":
         desc = f"move {e['dst_rel']} back to {e['src_rel']}"
     elif e["backup"]:
-        desc = f"restore {e['rel']} to the version before the change"
+        desc = f"restore {clean(e['rel'])} to the version before the change"
     else:
-        desc = f"remove the newly created file {e['rel']} (a copy goes to {BACKUP_DIR})"
+        desc = f"remove the newly created file {clean(e['rel'])} (a copy goes to {BACKUP_DIR})"
     if not confirm(f"Undo: {desc}?"):
         print()
         return None
@@ -666,10 +674,10 @@ def undo():
         shutil.move(e["dst"], e["src"])
     elif e["backup"]:
         if os.path.exists(e["full"]):
-            backup_copy(e["full"], e["rel"], "vor-undo")
+            backup_copy(e["full"], e["rel"], "before-undo")
         shutil.copy2(e["backup"], e["full"])
     elif os.path.exists(e["full"]):
-        backup_copy(e["full"], e["rel"], "entfernt", move=True)
+        backup_copy(e["full"], e["rel"], "removed", move=True)
     journal.pop()
     stats["undone"] += 1
     print(f"  {GREEN}✓{RESET} {DIM}undone:{RESET} {desc}\n")
@@ -756,6 +764,7 @@ def http_get(url, timeout=30, data=None):
     return ctype, raw.decode(charset.group(1) if charset else "utf-8", errors="replace")
 
 
+MAX_WEB_DETAIL = 1000
 WEB_DENIED = "The user declined the internet access. Nothing was fetched."
 
 
@@ -764,16 +773,20 @@ def confirm_web(what, detail):
     inside a URL or search query (e.g. when a manipulated document tells it to)."""
     ui_break()
     shown = clean(detail)
-    if len(shown) > term_width() - 12:
-        shown = shown[: term_width() - 13] + "…"
-    print(f"    {DIM}{what}:{RESET} {shown}")
+    if len(shown) > MAX_WEB_DETAIL:
+        raise ValueError(f"Refused: the {what.lower()} is longer than {MAX_WEB_DETAIL} characters.")
+    # shown in full (wrapped), so nothing can hide behind a cut-off end
+    width = max(20, term_width() - 6)
+    print(f"    {DIM}{what}:{RESET}")
+    for i in range(0, len(shown), width):
+        print(f"    {shown[i:i + width]}")
     return confirm("Allow internet access?")
 
 
 def fetch_url(url):
     if not re.match(r"^https?://", url):
         return "Error: only http and https addresses are allowed."
-    check_public_url(url)
+    # the public-address check runs in http_get, after the OK: already its DNS lookup could carry data out
     if not confirm_web("Address", url):
         return WEB_DENIED
     ctype, text = http_get(url)
@@ -875,7 +888,7 @@ def link(text, full):
 
 def file_link(rel):
     full = os.path.join(ROOT, rel)
-    return link(rel, full) if os.path.exists(full) else rel
+    return link(clean(rel), full) if os.path.exists(full) else clean(rel)
 
 
 def right_aligned(text):
@@ -1759,6 +1772,8 @@ BROAD_FOLDERS = {"/", "/Users", "/Volumes", os.path.realpath(os.path.expanduser(
 
 
 def main():
+    os.makedirs(HOME_DIR, exist_ok=True)
+    os.chmod(HOME_DIR, 0o700)  # saved chats contain file contents; other accounts on this Mac must not read them
     if ROOT in BROAD_FOLDERS:
         print(card(f"{ORANGE}! Warning{RESET}", [
             f"Here Flashcat would have access to {BOLD}all{RESET} files in {ROOT},",
@@ -1809,7 +1824,7 @@ def chat_loop(messages):
             try:
                 messages = handle_command(user, messages)
             except Exception as e:
-                print(f"\nFehler: {e}\n")
+                print(f"\nError: {e}\n")
             if messages is None:
                 return
             continue
