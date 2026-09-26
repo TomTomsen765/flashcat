@@ -89,7 +89,7 @@
 
   .hero {
     display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: center;
-    padding: 48px 0 160px; position: relative;
+    padding: 48px 0 70px; position: relative;
   }
   #flash { font-size: 30px; display: inline-block; cursor: pointer; margin-bottom: 18px; position: relative; }
   #flash .zz { position: absolute; left: 100%; top: -10px; color: var(--muted); font: 600 16px var(--sans);
@@ -120,18 +120,6 @@
   .demo .peek-clip { position: absolute; top: -60px; right: 0; width: 160px; height: 60px; overflow: hidden; }
   .demo .peek { position: absolute; bottom: -56px; right: 40px; font-size: 16px; animation: peek 7s ease-in-out infinite; }
   @keyframes peek { 0%, 55%, 100% { transform: translateY(0); } 65%, 88% { transform: translateY(-54px); } }
-
-  /* the parade walking along the bottom of the hero */
-  .parade { position: absolute; left: 0; right: 0; bottom: 24px; height: 96px; overflow: hidden;
-    pointer-events: none; mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
-  .parade .walker { position: absolute; bottom: 0; left: 0; display: flex; align-items: flex-end; gap: 18px;
-    animation: walk 34s linear infinite; }
-  .parade .cat { animation: bob .5s ease-in-out infinite alternate; }
-  .parade .cat:nth-child(2) { animation-delay: .12s; }
-  .parade .cat:nth-child(3) { animation-delay: .25s; }
-  .parade .cat:nth-child(4) { animation-delay: .37s; }
-  @keyframes walk { from { transform: translateX(-340px); } to { transform: translateX(calc(100vw + 40px)); } }
-  @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-4px); } }
 
   section { padding: 70px 0; }
   h2 { font-size: clamp(30px, 4vw, 42px); letter-spacing: -.02em; margin: 0 0 12px; }
@@ -179,7 +167,7 @@
   footer p { margin: 6px 0; }
 
   @media (max-width: 900px) {
-    .hero { grid-template-columns: 1fr; gap: 40px; padding: 24px 0 130px; }
+    .hero { grid-template-columns: 1fr; gap: 40px; padding: 24px 0 50px; }
     .grid, .safety, .macs { grid-template-columns: 1fr 1fr; }
   }
   @media (max-width: 600px) {
@@ -192,7 +180,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-    .parade { display: none; }
   }
 </style>
 </head>
@@ -234,7 +221,6 @@
         <img src="demo.svg" width="785" height="666"
              alt="Flashcat in the terminal: asked which invoice is due first, it reads two PDF invoices, shows the table it wants to write, writes invoices.md after the user answers y, and answers that the Blue Harbor Hosting invoice is due first">
       </div>
-      <div class="parade" aria-hidden="true"><div class="walker"></div></div>
     </div>
 
     <section id="features">
@@ -399,26 +385,6 @@
     const c = pick(skyCats);
     night ? blink(c, pick(["o.-", "-.o"]), 500) : blink(c, pick(["-.-", "-.-", "o.-", "^.^"]), 180);
   }, 260);
-
-  // ---------- a family walking along the bottom of the hero ----------
-  const walker = document.querySelector(".parade .walker");
-  [22, 15, 13, 11].forEach((size, i) => {
-    const c = document.createElement("pre");
-    c.className = "cat";
-    c.style.fontSize = size + "px";
-    c.style.color = i ? "var(--dim)" : "var(--muted)";
-    c.dataset.eyes = awake;
-    c.innerHTML = face(awake);
-    walker.appendChild(c);
-    if (!reduced) {
-      let left = true;       // the feet move while walking
-      setInterval(() => {
-        c.innerHTML = c.innerHTML.replace(/\n.*$/, left ? "\n  >^<" : "\n > ^ <");
-        left = !left;
-      }, 250 + i * 20);
-      setInterval(() => blink(c, night ? "-.-" : "-.-", 150), rand(3000, 7000));
-    }
-  });
 
   // ---------- cats that peek over the demo and hide behind the cards ----------
   document.querySelectorAll(".peek, .hide .cat").forEach(c => {
