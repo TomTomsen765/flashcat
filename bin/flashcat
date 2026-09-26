@@ -2,7 +2,8 @@
 # Flashcat - a local AI assistant in the terminal (named after Flash the cat). Runs an LM Studio model
 # (default: Gemma 4 26B) and can work with files in the current folder.
 # Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
-#          name is enough), --models (list installed models). Type /help inside the chat for commands.
+#          name is enough), --models (list installed models), --update (install the newest version).
+#          Type /help inside the chat for commands.
 # Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
 # unloads it again and stops what Flashcat started (server, LM Studio background service), freeing the RAM.
 LMS=~/.lmstudio/bin/lms
@@ -10,6 +11,15 @@ LMS=~/.lmstudio/bin/lms
 MODEL=gemma-4-26b-a4b-it-qat
 STATE=~/.flashcat/active
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
+
+if [[ $1 == --update ]]; then
+  # runs the installer from GitHub: replaces Flashcat's files, keeps chats and the downloaded model
+  installer=$(curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh) || {
+    echo "Update failed: GitHub could not be reached. Check the internet connection and try again." >&2
+    exit 1
+  }
+  exec /bin/bash -c "$installer"
+fi
 
 mkdir -p $STATE
 # Was LM Studio running before? (checked before the first lms call, which starts its background service)

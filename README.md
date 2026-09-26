@@ -70,7 +70,8 @@ Then just talk to it:
 | `Esc` | cancel the current answer |
 | `@file` | attach a file to your message (Tab completes) |
 
-Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`.
+Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
+`flashcat --update`.
 
 Put standing instructions into a `FLASHCAT.md` in your project folder (or `~/.flashcat/FLASHCAT.md`
 for all folders).
@@ -85,7 +86,7 @@ for all folders).
 Flashcat uses the port set in LM Studio's server settings automatically.
 Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
 
-**Update:** run the install command again. **Troubleshooting:** open LM Studio once, check that the
+**Update:** `flashcat --update` (or run the install command again). **Troubleshooting:** open LM Studio once, check that the
 model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
 
 ## What it can do

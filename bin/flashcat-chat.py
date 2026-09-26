@@ -1675,6 +1675,7 @@ HELP_TIPS = [
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ("--model", "another model", "flashcat --models lists them"),
+    ("--update", "newest version", "flashcat --update"),
 ]
 
 
