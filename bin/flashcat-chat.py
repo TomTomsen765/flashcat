@@ -411,13 +411,18 @@ def check_target(path, allowed_ext):
     return full, rel
 
 
-def confirm(question):
+def confirm(question, show_all=None):
+    """Y/N question. With `show_all` (a function), A shows the complete preview first and asks again."""
     ui_break()
+    choices = "[Y/N/A = show all]" if show_all else "[Y/N]"
     try:
-        answer = input(f"  {ORANGE}?{RESET} {question} {DIM}[Y/N]{RESET} ")
+        answer = input(f"  {ORANGE}?{RESET} {question} {DIM}{choices}{RESET} ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = ""
-    return answer.strip().lower() in ("y", "yes")
+    if show_all and answer in ("a", "all"):
+        show_all()
+        return confirm(question)
+    return answer in ("y", "yes")
 
 
 def backup_copy(full, rel, suffix="bak", move=False):
@@ -455,18 +460,24 @@ def save_with_backup(full, rel, content=None, source_file=None):
 
 
 def preview(title, lines, limit=20):
-    """Card with line numbers and a green bar: what a new file / document will contain."""
+    """Card with line numbers and a green bar: what a new file / document will contain.
+
+    Returns a function that shows the complete preview if lines were cut off (for confirm's A), else None."""
     ui_break()
     width = term_width() - 14
     body = [f"{GREEN}▌{RESET}{DIM}{n:>4}{RESET}  {clean(line)[:width]}" for n, line in enumerate(lines[:limit], 1)]
-    if len(lines) > limit:
-        body.append(f"{DIM}      … {len(lines) - limit} more lines{RESET}")
+    cut = limit is not None and len(lines) > limit
+    if cut:
+        body.append(f"{DIM}      … {len(lines) - limit} more lines (A shows all){RESET}")
     print()
     print(card(f"{ORANGE}{clean(title)}{RESET}", body or [f"{DIM}(empty){RESET}"]))
+    return (lambda: preview(title, lines, limit=None)) if cut else None
 
 
 def diff_card(title, old, new, context=2, limit=40):
-    """Card showing a change with old/new line numbers and red/green bars."""
+    """Card showing a change with old/new line numbers and red/green bars.
+
+    Returns a function that shows the complete change if lines were cut off (for confirm's A), else None."""
     ui_break()
     a, b = clean(old).splitlines(), clean(new).splitlines()
     width = term_width() - 16
@@ -480,10 +491,12 @@ def diff_card(title, old, new, context=2, limit=40):
                 continue
             body += [f"{RED}▌{RESET}{DIM}{i + 1:>4}{RESET}  {RED}{a[i][:width]}{RESET}" for i in range(i1, i2)]
             body += [f"{GREEN}▌{RESET}{DIM}{j + 1:>4}{RESET}  {GREEN}{b[j][:width]}{RESET}" for j in range(j1, j2)]
-    if len(body) > limit:
-        body = body[:limit] + [f"{DIM}      … {len(body) - limit} more lines{RESET}"]
+    cut = limit is not None and len(body) > limit
+    if cut:
+        body = body[:limit] + [f"{DIM}      … {len(body) - limit} more lines (A shows all){RESET}"]
     print()
     print(card(f"{ORANGE}{clean(title)}{RESET}", body or [f"{DIM}(no change){RESET}"]))
+    return (lambda: diff_card(title, old, new, context, limit=None)) if cut else None
 
 
 def write_file(path, content):
@@ -491,10 +504,10 @@ def write_file(path, content):
     lines = content.splitlines()
     if os.path.exists(full):
         with open(full, encoding="utf-8", errors="replace") as f:
-            diff_card(f"overwrites {rel}", f.read(), content)
+            show_all = diff_card(f"overwrites {rel}", f.read(), content)
     else:
-        preview(f"new file {rel} · {len(lines)} lines", lines)
-    if not confirm("Write?"):
+        show_all = preview(f"new file {rel} · {len(lines)} lines", lines)
+    if not confirm("Write?", show_all):
         print()
         return "The user declined writing. The file was not changed."
     return save_with_backup(full, rel, content)
@@ -512,8 +525,8 @@ def edit_file(path, old_text, new_text):
     if count > 1:
         return f"Error: old_text occurs {count} times. Give more surrounding text so the passage is unique."
     new = old.replace(old_text, new_text, 1)
-    diff_card(f"changes {rel}", old, new)
-    if not confirm("Change?"):
+    show_all = diff_card(f"changes {rel}", old, new)
+    if not confirm("Change?", show_all):
         print()
         return "The user declined the change. The file was not changed."
     return save_with_backup(full, rel, new)
@@ -564,8 +577,8 @@ def markdown_to_html(md, plain_lists=False):
 def write_docx(path, content):
     full, rel = check_target(path, {".docx"})
     replaces = " (replaces the existing one)" if os.path.exists(full) else ""
-    preview(f"Word document {rel}{replaces}", content.splitlines())
-    if not confirm("Create?"):
+    show_all = preview(f"Word document {rel}{replaces}", content.splitlines())
+    if not confirm("Create?", show_all):
         print()
         return "The user declined. No document was created."
     with tempfile.TemporaryDirectory() as tmp:
@@ -605,8 +618,8 @@ function run(a) {
 def write_pdf(path, content):
     full, rel = check_target(path, {".pdf"})
     replaces = " (replaces the existing one)" if os.path.exists(full) else ""
-    preview(f"PDF {rel}{replaces}", content.splitlines())
-    if not confirm("Create?"):
+    show_all = preview(f"PDF {rel}{replaces}", content.splitlines())
+    if not confirm("Create?", show_all):
         print()
         return "The user declined. No PDF was created."
     with tempfile.TemporaryDirectory() as tmp:

@@ -102,7 +102,8 @@ model is downloaded (`flashcat --models`), and close other large apps if answers
 - Flashcat can only access the folder it was started in (and its subfolders). Paths outside, `../`
   and symbolic links pointing outside are blocked.
 - **Every** change asks first — with a preview of the change — and the old version is backed up in
-  `.flashcat-backup/`. `/undo` reverts the last change.
+  `.flashcat-backup/`. `/undo` reverts the last change. Long previews are shortened – answer `A` to
+  see everything before you decide.
 - **Every** web request asks first and shows the exact address or search term. Addresses on your own
   computer or local network are always blocked.
 - It cannot delete files or run commands.
