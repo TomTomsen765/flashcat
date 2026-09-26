@@ -198,11 +198,14 @@ def private_item(full):
     """The private item `full` belongs to - a key file, or the hidden file/folder in ~ or ~/Library - or None."""
     if PRIVATE_NAME.fullmatch(os.path.basename(full)):
         return full
-    if full == HOME or not inside(full, HOME):
+    # compared in lower case: macOS ignores case in file names, so ~/LIBRARY is ~/Library
+    low, home = full.lower(), HOME.lower()
+    if low == home or not inside(low, home):
         return None
-    top = os.path.join(HOME, os.path.relpath(full, HOME).split(os.sep)[0])
-    name = os.path.basename(top)
-    return top if (name.startswith(".") or name == "Library") and not inside(ROOT, top) else None
+    name = full[len(HOME) + 1:].split(os.sep)[0]
+    top = os.path.join(HOME, name)
+    private = name.startswith(".") or name.lower() == "library"
+    return top if private and not inside(ROOT.lower(), top.lower()) else None
 
 
 def locked(full):
@@ -501,13 +504,17 @@ def search(pattern, path="."):
 journal = []  # changes made in this chat, newest last; used by /undo
 
 
+def in_backup(rel):
+    return rel.split(os.sep)[0].lower() == BACKUP_DIR  # lower case: macOS ignores case in file names
+
+
 def check_target(path, allowed_ext):
     """Returns (full, rel) for a file that may be written, or raises ValueError with a refusal reason."""
     full = resolve(path, ask=True)
     rel = os.path.relpath(full, ROOT)
     if os.path.splitext(full)[1].lower() not in allowed_ext:
         raise ValueError(f"Refused: only {', '.join(sorted(allowed_ext))} are allowed.")
-    if rel.split(os.sep)[0] == BACKUP_DIR:
+    if in_backup(rel):
         raise ValueError("Refused: the backup folder is off limits.")
     if os.path.isdir(full):
         raise ValueError("Refused: this is a folder.")
@@ -751,7 +758,7 @@ def move_file(source, destination):
     if os.path.isdir(dst):
         dst = os.path.join(dst, os.path.basename(src))
     src_rel, dst_rel = clean(os.path.relpath(src, ROOT)), clean(os.path.relpath(dst, ROOT))
-    if BACKUP_DIR in (src_rel.split(os.sep)[0], dst_rel.split(os.sep)[0]):
+    if in_backup(src_rel) or in_backup(dst_rel):
         return "Refused: the backup folder is off limits."
     if os.path.exists(dst):
         return f"Refused: {dst_rel} already exists – nothing is overwritten."
@@ -979,7 +986,9 @@ CODE_ALIASES = {"js": "javascript", "ts": "typescript", "sh": "bash", "shell": "
 ITALIC, CYAN, BLUE = "\033[3m", "\033[36m", "\033[1;34m"
 
 
-CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")  # everything except tab and newline
+# control characters except tab and newline, and invisible Unicode direction marks (they can make an address
+# look different from what it is)
+CONTROL_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 def clean(text):
