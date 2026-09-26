@@ -86,8 +86,7 @@ for all folders).
 Flashcat uses the port set in LM Studio's server settings automatically.
 Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
 
-**Update:** `flashcat --update` (or run the install command again). **Troubleshooting:** open LM Studio once, check that the
-model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
+**Troubleshooting:** open LM Studio once, check that the model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
 
 ## What it can do
 
@@ -118,6 +117,15 @@ Found a security problem? Please report it privately – see [SECURITY.md](SECUR
 > **Please double-check important results.** Flashcat is powered by a language model, and language
 > models make mistakes – with numbers, dates and facts too. Check anything that matters (contracts,
 > amounts, deadlines) against the original.
+
+## Update
+
+```sh
+flashcat --update
+```
+
+Installs the newest version. Your chats, settings and the downloaded model stay.
+(Versions before this command existed: run the install command once more.)
 
 ## Uninstall
 
