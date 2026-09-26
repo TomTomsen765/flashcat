@@ -8,7 +8,7 @@ the web — all with a model that runs **on your own Mac** through [LM Studio](h
 Nothing you ask leaves your computer unless you allow a web request: a private, offline AI chat for your
 MacBook, powered by a local LLM (Google Gemma 4).
 
-Named after Flash, my cat. 🐈
+Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](https://tomtomsen765.github.io/flashcat/)
 
 ## Install
 
