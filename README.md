@@ -52,14 +52,14 @@ Flashcat itself is one Python file using only the standard library
 
 ### Which Mac?
 
-Flashcat is built and tuned on a **MacBook Air M5 with 24 GB** of memory — that is the sweet spot for
-the default model (Gemma 4 26B, 64k context).
+Flashcat is built and tuned on a **MacBook Air M5 with 24 GB** of memory — the minimum for the
+default model (Gemma 4 26B, about 15.6 GB, 64k context).
 
 | Memory | Experience |
 |---|---|
-| **less than 24 GB** | difficult – the model barely fits, answers get slow, close other apps |
-| **24 GB** | good – what Flashcat is optimized for |
-| **more than 24 GB** | great – plenty of room for other apps and larger contexts |
+| **less than 24 GB** | difficult – the model barely fits, answers get slow |
+| **24 GB** | okay – **close all other apps** (browser, Bionic, chat apps …) while you use Flashcat. If they stay open, macOS moves parts of the model to disk and answers become much slower. |
+| **32 GB or more** | smooth – you can keep your other apps open |
 
 It should run on any Apple Silicon Mac (M1 or newer) with enough memory, but **older chips are
 untested** – expect slower answers, since speed depends mostly on the chip, not on Flashcat. Most
