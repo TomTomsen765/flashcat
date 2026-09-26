@@ -99,6 +99,12 @@ for all folders).
 The model runs locally; LM Studio is loaded when Flashcat starts and unloaded again when the last
 Flashcat window closes, so the memory is freed.
 
+Found a security problem? Please report it privately – see [SECURITY.md](SECURITY.md).
+
+> **Please double-check important results.** Flashcat is powered by a language model, and language
+> models make mistakes – with numbers, dates and facts too. Check anything that matters (contracts,
+> amounts, deadlines) against the original.
+
 ## Uninstall
 
 ```sh
@@ -107,4 +113,10 @@ curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/uninstal
 
 ## License
 
-MIT
+Flashcat is released under the [MIT License](LICENSE).
+
+The default model is **not** part of Flashcat: the installer downloads
+[Gemma 4 26B (QAT, GGUF)](https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF) from
+Hugging Face through LM Studio. It is made by Google and comes with its own license and terms of use –
+see the model page. The same applies to any other model you use with `flashcat --model`.
+LM Studio has its own terms as well.
