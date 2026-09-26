@@ -1,0 +1,37 @@
+#!/bin/zsh
+# "Last one out turns off the lights": called when a Flashcat session ends (normally or when its window is closed).
+# Unloads the model, stops the server and the LM Studio background service - but only if Flashcat started them
+# and no other Flashcat session is still running.
+# Usage: flashcat-cleanup [-v] <pid of the ending Flashcat session>
+LMS=~/.lmstudio/bin/lms
+STATE=~/.flashcat/active
+SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
+verbose=
+[[ $1 == -v ]] && { verbose=1; shift }
+say() { [[ -n $verbose ]] && print -r -- "$1" }
+
+rm -f $STATE/session.$1
+for f in $STATE/session.*(N); do
+  if kill -0 ${f##*.} 2>/dev/null; then
+    say "The model stays loaded – another Flashcat window is still open."
+    exit 0
+  fi
+  rm -f $f  # session that ended without cleaning up
+done
+
+if [[ -f $STATE/loaded ]]; then
+  for model in ${(f)"$(<$STATE/loaded)"}; do
+    $LMS unload $model >/dev/null 2>&1 && say "$model unloaded."
+  done
+  rm -f $STATE/loaded
+fi
+if [[ -f $STATE/server ]]; then
+  $LMS server stop >/dev/null 2>&1 && say "LM Studio server stopped."
+  rm -f $STATE/server
+fi
+if [[ -f $STATE/service ]]; then
+  sleep 1
+  pkill -TERM -f "$SERVICE_PATTERN" && say "LM Studio background service stopped."
+  rm -f $STATE/service
+fi
+exit 0

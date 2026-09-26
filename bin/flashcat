@@ -1,0 +1,81 @@
+#!/bin/zsh
+# Flashcat - a local AI assistant in the terminal (named after Flash the cat). Runs an LM Studio model
+# (default: Gemma 4 26B) and can work with files in the current folder.
+# Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
+#          name is enough), --models (list installed models). Type /help inside the chat for commands.
+# Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
+# unloads it again and stops what Flashcat started (server, LM Studio background service), freeing the RAM.
+LMS=~/.lmstudio/bin/lms
+# context window in tokens (override per start: FLASHCAT_CONTEXT=32768 flashcat)
+MODEL=gemma-4-26b-a4b-it-qat
+STATE=~/.flashcat/active
+SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
+
+mkdir -p $STATE
+# Was LM Studio running before? (checked before the first lms call, which starts its background service)
+if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
+  touch $STATE/service
+fi
+touch $STATE/session.$$
+trap 'exit 129' HUP TERM
+
+if [[ $1 == --models ]]; then
+  $LMS ls --llm 2>/dev/null
+  ~/.local/bin/flashcat-cleanup $$
+  exit
+fi
+if [[ $1 == --model || $1 == -m ]]; then
+  [[ -n $2 ]] || { echo "Which model? List them with: flashcat --models" >&2; ~/.local/bin/flashcat-cleanup $$; exit 1; }
+  MODEL=$($LMS ls --llm --json 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+want = sys.argv[1].lower()
+keys = [m["modelKey"] for m in json.load(sys.stdin)]
+hits = [k for k in keys if k.lower() == want] or [k for k in keys if want in k.lower()]
+print(hits[0] if len(hits) == 1 else "")
+sys.exit(0 if len(hits) == 1 else 1)' "$2") || {
+    echo "No unique model matches '$2'. Installed models:" >&2
+    $LMS ls --llm >&2 2>/dev/null
+    ~/.local/bin/flashcat-cleanup $$
+    exit 1
+  }
+  shift 2
+fi
+
+# Watchdog in its own session: runs the cleanup even if the terminal window is closed and every process of
+# the window gets killed. On a normal exit this script stops the watchdog and runs the cleanup itself.
+/usr/bin/python3 -c '
+import os, signal, subprocess, sys, time
+os.setsid()
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+parent = int(sys.argv[1])
+while True:
+    try:
+        os.kill(parent, 0)
+    except ProcessLookupError:
+        break
+    time.sleep(1)
+subprocess.run([os.path.expanduser("~/.local/bin/flashcat-cleanup"), str(parent)],
+               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+' $$ </dev/null >/dev/null 2>&1 &
+watchdog_pid=$!
+
+if ! $LMS server status 2>&1 | grep -q "is running"; then
+  $LMS server start >/dev/null 2>&1 || { ~/.local/bin/flashcat-cleanup $$; exit 1; }
+  touch $STATE/server
+fi
+
+if ! $LMS ps 2>/dev/null | grep -q "^$MODEL "; then
+  echo "Loading $MODEL …"
+  if ! $LMS load $MODEL --context-length ${FLASHCAT_CONTEXT:-65536} --parallel 1 -y >/dev/null 2>&1; then
+    echo "Loading failed." >&2
+    kill $watchdog_pid 2>/dev/null
+    ~/.local/bin/flashcat-cleanup $$
+    exit 1
+  fi
+  grep -qx "$MODEL" $STATE/loaded 2>/dev/null || print -r -- "$MODEL" >> $STATE/loaded
+fi
+
+/usr/bin/python3 ~/.local/bin/flashcat-chat.py $MODEL "$@"
+
+kill $watchdog_pid 2>/dev/null
+~/.local/bin/flashcat-cleanup -v $$
