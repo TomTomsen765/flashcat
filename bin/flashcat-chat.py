@@ -237,8 +237,11 @@ def resolve(path, ask=False):
     if not inside(full, ROOT):
         raise ValueError("Access outside the start folder is not allowed.")
     if locked(full):
-        if not (ask and confirm_private(private_item(full))):
+        if not ask:
             raise ValueError(PRIVATE_REFUSED)
+        if not confirm_private(private_item(full)):
+            raise ValueError("Refused: Flashcat asked the user whether you may access this private data and "
+                             "the user answered No. Say briefly that you did not open it, and do not ask again.")
         private_ok.add(private_item(full))
         print(f"  {RED}✓ {clean(private_item(full).replace(HOME, '~', 1))} unlocked for this chat{RESET}")
     return full
