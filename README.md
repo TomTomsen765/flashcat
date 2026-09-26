@@ -100,24 +100,44 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 
 ## Safety
 
-- Flashcat can only access the folder it was started in (and its subfolders). Paths outside, `../`
-  and symbolic links pointing outside are blocked.
-- **Every** change asks first — with a preview of the change — and the old version is backed up in
-  `.flashcat-backup/`. `/undo` reverts the last change. Long previews are shortened – answer `A` to
-  see everything before you decide.
-- **Every** web request asks first and shows the exact address or search term. Addresses on your own
-  computer or local network are always blocked.
-- It cannot delete files or run commands.
-- Private data is blocked, even when started in the home folder: everything hidden directly in
-  your home folder (`~/.ssh`, `~/.zshrc`, `~/.config`, shell history, …), `~/Library` (keychains,
-  browser data, mail, messages) and private key files (`id_rsa`, `*.pem`, …). If you really need
-  one of them, Flashcat asks first – in red – and unlocks only that item, only for the current chat.
-- Starting it in your home folder asks first – before the model is loaded.
-- Instructions in a folder's `FLASHCAT.md` (e.g. in a downloaded project) are only used after you
-  read and allow them.
+Flashcat is built so that nothing happens behind your back. In short: **it only sees the folder you
+start it in, it asks before every change and every internet access, and your private data stays
+locked.** Details: [SECURITY.md](SECURITY.md).
 
-The model runs locally; LM Studio is loaded when Flashcat starts and unloaded again when the last
-Flashcat window closes, so the memory is freed.
+**Your files**
+- Flashcat only sees the folder it was started in and its subfolders. `../`, absolute paths and
+  links pointing outside are blocked.
+- **Private data is locked**, even when started in the home folder: everything hidden directly in
+  your home folder (`~/.ssh`, `~/.zshrc`, `~/.config`, shell history, …), `~/Library` (keychains,
+  browser data, mail, messages) and private key files (`id_rsa`, `*.pem`, …). If you really need one
+  of them, Flashcat asks first – in red – and unlocks only that item, only for the current chat.
+- Starting it in your home folder asks first – before the model is even loaded.
+- It cannot delete files or run commands, and moving never overwrites anything.
+
+**Every change asks first**
+- You see a preview of every new file and every change before you answer `Y`. Long previews are
+  shortened – answer `A` to see everything first.
+- The old version is backed up in `.flashcat-backup/` (kept out of git automatically); `/undo`
+  reverts the last change. Flashcat itself cannot change or remove the backups.
+
+**Every internet access asks first**
+- Web searches and web pages are only fetched after your `Y` – nothing leaves your Mac before that,
+  not even a name lookup. You always see the complete address or search term, never a cut-off one.
+- Addresses on your own computer or local network are always blocked, also after redirects.
+- Hidden characters that could disguise what you see (terminal escape codes, invisible text-direction
+  marks) are removed from everything Flashcat shows.
+
+**Instructions from others**
+- A `FLASHCAT.md` in a folder (e.g. in a downloaded project) is shown to you and only used after you
+  allow it – and again whenever it changes.
+
+**Your data stays on your Mac**
+- The model runs locally in LM Studio. Chats are stored only in `~/.flashcat`, readable only by your
+  user account. LM Studio is unloaded again when the last Flashcat window closes, so the memory is freed.
+
+**Installing and updating**
+- The installer only does what it describes. If the download breaks off, nothing runs at all.
+  `flashcat --update` uses the same installer and keeps your chats and the model.
 
 Found a security problem? Please report it privately – see [SECURITY.md](SECURITY.md).
 
