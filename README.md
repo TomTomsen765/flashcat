@@ -1,6 +1,6 @@
 # Flashcat
 
-<p align="center"><img src="docs/screenshot.svg" alt="Flashcat in the terminal: it reads costs.csv and notes.md and answers with a table and a budget check" width="760"></p>
+<p align="center"><img src="docs/demo.svg" alt="Flashcat in the terminal: asked which invoice is due first, it reads two PDF invoices, shows the table it wants to write, writes invoices.md after the user answers y, and answers that the Blue Harbor Hosting invoice is due first" width="760"></p>
 
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
