@@ -122,6 +122,9 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   rename and move files
 - **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
 - **Images:** describes and analyzes pictures in the folder
+- **Coding:** reads, explains, writes and fixes code in the folder – you confirm every change. It is
+  no [Claude Code](https://claude.com/claude-code), but it does a solid job on simple tasks, and it is
+  free and runs entirely on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names
 
