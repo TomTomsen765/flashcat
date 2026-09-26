@@ -5,7 +5,8 @@
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
 the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai).
-Nothing you ask leaves your computer unless you allow a web request.
+Nothing you ask leaves your computer unless you allow a web request: a private, offline AI chat for your
+MacBook, powered by a local LLM (Google Gemma 4).
 
 Named after Flash, my cat. 🐈
 
@@ -34,6 +35,9 @@ the default model (Gemma 4 26B, 64k context).
 | **less than 24 GB** | difficult – the model barely fits, answers get slow, close other apps |
 | **24 GB** | good – what Flashcat is optimized for |
 | **more than 24 GB** | great – plenty of room, faster and larger contexts |
+
+It runs on any Apple Silicon Mac – **MacBook Air, MacBook Pro, Mac mini, iMac, Mac Studio and Mac Pro**
+with M1, M2, M3, M4 or M5 chips – as long as there is enough memory.
 
 ## Use
 
