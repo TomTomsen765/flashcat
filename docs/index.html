@@ -157,6 +157,7 @@
     border-radius: 10px; padding: 14px 14px 14px 18px; margin: 12px 0 6px; }
   .cmd code { flex: 1; overflow-x: auto; white-space: nowrap; color: var(--text); font-size: 15px; }
   .cmd code::before { content: "$ "; color: var(--dim); }
+  .install .or { display: block; margin: 14px 0 0; color: var(--muted); font-size: 15px; }
   .copy { flex: none; background: var(--card); color: var(--text); border: 1px solid var(--card-line);
     border-radius: 8px; padding: 7px 14px; font: 600 14px var(--sans); cursor: pointer; }
   .copy:hover { border-color: var(--orange); }
@@ -291,7 +292,9 @@
 
     <section id="install">
       <h2>Install</h2>
-      <p class="lead">macOS on Apple Silicon and Apple's command line tools (<code>xcode-select --install</code>).</p>
+      <p class="lead"><strong>You need</strong> a Mac with Apple Silicon (M1 or newer). Flashcat uses Python from
+        Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to get
+        them (<code>xcode-select --install</code>).</p>
       <div class="install">
         <ol>
           <li>Install <a href="https://lmstudio.ai/download">LM Studio</a> or
@@ -300,15 +303,18 @@
           <li>Run this in the terminal:
             <div class="cmd"><code id="cmd">curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash</code>
               <button class="copy" type="button" data-copy="cmd">Copy</button></div>
+            <span class="or">or with <a href="https://brew.sh">Homebrew</a> – Flashcat offers to download the model on its first start:</span>
+            <div class="cmd"><code id="cmd-brew">brew install tomtomsen765/tap/flashcat</code>
+              <button class="copy" type="button" data-copy="cmd-brew">Copy</button></div>
           </li>
           <li>Go to a folder and start it: <code>cd ~/Documents &amp;&amp; flashcat</code></li>
         </ol>
         <p class="small">The installer downloads the default model (about 15.6 GB) through LM Studio (or Ollama).
-          With Homebrew: <code>brew install tomtomsen765/tap/flashcat</code>. Both LM Studio and Ollama
+          Both LM Studio and Ollama
           installed? Flashcat asks once which one to use (change it with <code>flashcat --backend</code>).
           Prefer to read the code before running it?
           <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a>
-          Update later with <code>flashcat --update</code> – you only get published releases that passed the
+          Update later with <code>flashcat --update</code> (Homebrew: <code>brew upgrade flashcat</code>) – you only get published releases that passed the
           automated safety tests.</p>
       </div>
     </section>
