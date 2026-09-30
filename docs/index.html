@@ -256,8 +256,8 @@
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Your files</h3>
           <p>Only the start folder and its subfolders. Hidden files in your home folder, <code>~/Library</code>
-            and private keys are locked. Commands run in a sandbox: no internet, and they can only write inside
-            the folder.</p></div>
+            and private keys are locked. Commands run in a sandbox: no internet, they can only write inside
+            the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Every change asks first</h3>
           <p>You see a preview – or the full command – before you answer <code>Y</code>. The old version is
@@ -304,10 +304,12 @@
           <li>Go to a folder and start it: <code>cd ~/Documents &amp;&amp; flashcat</code></li>
         </ol>
         <p class="small">The installer downloads the default model (about 15.6 GB) through LM Studio (or Ollama).
-          With Homebrew: <code>brew install tomtomsen765/tap/flashcat</code>.
+          With Homebrew: <code>brew install tomtomsen765/tap/flashcat</code>. Both LM Studio and Ollama
+          installed? Flashcat asks once which one to use (change it with <code>flashcat --backend</code>).
           Prefer to read the code before running it?
           <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a>
-          Update later with <code>flashcat --update</code>.</p>
+          Update later with <code>flashcat --update</code> – you only get published releases that passed the
+          automated safety tests.</p>
       </div>
     </section>
   </main>

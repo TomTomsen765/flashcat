@@ -159,7 +159,8 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   free and runs entirely on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
-  screenshots via `/paste`; one-off questions with `flashcat "…"` and piped input
+  screenshots via `Ctrl+V`; one-off questions with `flashcat "…"` and piped input; the window title shows
+  `🐈 Flashcat · <folder>`, so you can tell several windows apart
 
 ## Safety
 
