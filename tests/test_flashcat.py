@@ -382,6 +382,19 @@ class ExportTest(FlashcatTest):
             self.assertNotIn(hidden, md)
 
 
+class ClipboardTest(FlashcatTest):
+    def test_ctrl_v_mark_becomes_image_or_text(self):
+        with mock.patch.object(self.chat, "read_clipboard", return_value=("image", "clipboard", "data:image/jpeg;base64,x")):
+            content = self.chat.attach_mentions("what is this [clipboard] ?")
+        self.assertEqual(content[0]["text"], "what is this [image] ?")
+        self.assertEqual(content[-1]["image_url"]["url"], "data:image/jpeg;base64,x")
+        self.assertEqual(self.chat.pasted_images, [])
+        with mock.patch.object(self.chat, "read_clipboard", return_value=("text", "disk full")):
+            self.assertEqual(self.chat.attach_mentions("why [clipboard]?"), "why disk full?")
+        with mock.patch.object(self.chat, "read_clipboard", return_value=(None, "the clipboard is empty")):
+            self.assertEqual(self.chat.attach_mentions("look [clipboard]"), "look")
+
+
 class ModelLoopTest(FlashcatTest):
     """The turn loop with a scripted model instead of LM Studio."""
 

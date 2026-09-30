@@ -47,7 +47,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -1973,7 +1973,7 @@ def start_card(loaded, sessions_count):
         hints.append("instructions loaded")
     if sessions_count:
         hints.append(f"{sessions_count} earlier chat{'s' if sessions_count > 1 else ''} (/resume)")
-    hints.append("/help for commands")
+    hints.append("Ctrl+V pastes images · /help for commands")
     rest = [f"{DIM}{pretty_model()} · {round(state['context'] / 1024)}k context{RESET}",
             f"{DIM}{folder}{RESET}", f"{DIM}{' · '.join(hints)}{RESET}"]
     title = f"{ORANGE}✻{RESET} {BOLD}Flashcat{RESET} {DIM}{VERSION}{RESET}"
@@ -2143,10 +2143,15 @@ def setup_completion():
         return
     readline.set_completer_delims(" \t\n")
     readline.set_completer(complete)
-    if "libedit" in (readline.__doc__ or ""):
+    if "libedit" in (readline.__doc__ or ""):  # macOS' Python
         readline.parse_and_bind("bind ^I rl_complete")
+        readline.parse_and_bind(f'bind -s ^V "{CLIPBOARD_MARK}"')  # Ctrl+V: paste an image (like in Claude Code)
     else:
         readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind(f'"\\C-v": "{CLIPBOARD_MARK}"')
+    if LIVE:
+        # no bracketed paste: with it, some terminals wrap pasted text in escape codes the line editor mangles
+        print("\033[?2004l", end="", flush=True)
 
 
 PASTE_JXA = """
@@ -2160,38 +2165,67 @@ function run(a) {
     var d = pb.dataForType(types[i]);
     if (!d.isNil()) { d.writeToFileAtomically(a[0], true); return "image"; }
   }
-  return "";
+  var text = pb.stringForType("public.utf8-plain-text");
+  return text.isNil() ? "" : "text:" + text.js;
 }
 """
+CLIPBOARD_MARK = "[clipboard]"  # Ctrl+V puts this into the input line; replaced by the clipboard when sent
+MAX_CLIPBOARD_TEXT = 100_000
 pasted_images = []  # (label, data URL) from /paste, sent with the next message
 
 
-def paste_image():
-    """Queues the image in the clipboard (a screenshot, or an image file copied in Finder) for the next message."""
+def read_clipboard():
+    """What is in the clipboard: ("image", label, data URL) for a screenshot or an image file copied in Finder,
+    ("text", text), or (None, reason)."""
     with tempfile.TemporaryDirectory() as tmp:
         target = os.path.join(tmp, "clipboard")
         kind = subprocess.run(["osascript", "-l", "JavaScript", "-e", PASTE_JXA, target],
-                              capture_output=True, text=True, timeout=30).stdout.strip()
+                              capture_output=True, text=True, timeout=30).stdout.rstrip("\n")
         if kind.startswith("file:"):
-            path = kind[5:]
             try:
-                full = resolve(os.path.relpath(path, ROOT), ask=True)
+                full = resolve(os.path.relpath(kind[5:], ROOT), ask=True)
             except ValueError:
-                print(f"The copied file is outside this folder – only files in {ROOT} can be attached.\n")
-                return
+                return None, f"the copied file is outside this folder – only files in {ROOT} can be attached"
+            rel = clean(os.path.relpath(full, ROOT))
             if os.path.splitext(full)[1].lower() not in IMAGE_EXT:
-                print(f"The copied file is no image – attach it with @{clean(os.path.relpath(full, ROOT))}\n")
-                return
-            label, url = clean(os.path.relpath(full, ROOT)), image_data_url(full)
-        elif kind == "image":
-            label, url = "clipboard", image_data_url(target)
-        else:
-            print("There is no image in the clipboard. Take a screenshot with ⌘⇧4 while holding Ctrl, "
-                  "then /paste.\n")
-            return
+                return None, f"the copied file is no image – attach it with @{rel}"
+            return "image", rel, image_data_url(full)
+        if kind == "image":
+            return "image", "clipboard", image_data_url(target)
+        if kind.startswith("text:") and kind[5:].strip():
+            return "text", clean(kind[5:])[:MAX_CLIPBOARD_TEXT]
+    return None, "the clipboard is empty"
+
+
+def paste_image():
+    """/paste: queues the image in the clipboard for the next message."""
+    got = read_clipboard()
+    if got[0] != "image":
+        print(("There is no image in the clipboard – " if got[0] == "text" else f"Nothing attached: {got[1]}. ")
+              + ("paste text with ⌘V. " if got[0] == "text" else "")
+              + "Screenshot to the clipboard: ⌘⇧4 while holding Ctrl.\n")
+        return
+    _, label, url = got
     pasted_images.append((label, url))
     print(f"  {DIM}◇{RESET} image from the {'clipboard' if label == 'clipboard' else label} attached "
           f"{DIM}– now type your question{RESET}\n")
+
+
+def insert_clipboard(text):
+    """Replaces the [clipboard] marks that Ctrl+V put into the message: an image is attached (as from /paste),
+    text is inserted."""
+    if CLIPBOARD_MARK not in text:
+        return text
+    got = read_clipboard()
+    if got[0] == "image":
+        pasted_images.append(got[1:])
+        print(f"  {DIM}◇{RESET} attaches the image from the {'clipboard' if got[1] == 'clipboard' else got[1]}")
+        state["tools_shown"] = True
+        return text.replace(CLIPBOARD_MARK, "[image]")
+    if got[0] == "text":
+        return text.replace(CLIPBOARD_MARK, got[1])
+    print(f"  {YELLOW}✗{RESET} {DIM}nothing pasted: {got[1]}{RESET}")
+    return text.replace(CLIPBOARD_MARK, "").strip()
 
 
 MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')
@@ -2199,6 +2233,7 @@ MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')
 
 def attach_mentions(text):
     """Resolves @file / @"file name" in the user's text. Returns message content (str or multi-part list)."""
+    text = insert_clipboard(text)
     blocks, images = [], []
     for m in MENTION.finditer(text):
         name = m.group(1) or m.group(2)
@@ -2240,7 +2275,7 @@ HELP_COMMANDS = [
     ("/copy", "copy the last answer", ""),
     ("/save", "save the last answer as a file", "/save name.md"),
     ("/export", "save the whole chat as Markdown", "/export name.md"),
-    ("/paste", "attach the image in the clipboard", "e.g. a screenshot"),
+    ("/paste", "attach the image in the clipboard", "or Ctrl+V while typing"),
     ("/remember", "note something for all chats", "/remember I use metric units"),
     ("/resume", "earlier chats in this folder", "/resume 2 loads no. 2"),
     ("/clear", "new chat", ""),
@@ -2253,6 +2288,7 @@ HELP_COMMANDS = [
 HELP_TIPS = [
     ("@file", "attach a file", "Tab completes · @\"with spaces.pdf\""),
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
+    ("Ctrl+V", "paste a screenshot or image", "⌘⇧4 + Ctrl copies a screenshot"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
     ("--model", "another model", "flashcat --models lists them"),
