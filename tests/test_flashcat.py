@@ -412,6 +412,40 @@ class CommandLineTest(unittest.TestCase):
             result = subprocess.run([shell, "-n", os.path.join(REPO, script)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, f"{script}: {result.stderr}")
 
+    def launcher(self, home, *args, lmstudio=True, ollama=True):
+        """Runs bin/flashcat with a fake home folder; LM Studio and Ollama are stand-in scripts."""
+        fake_bin = os.path.join(home, "fake-bin")
+        os.makedirs(fake_bin, exist_ok=True)
+        stubs = [(os.path.join(home, ".lmstudio", "bin", "lms"), lmstudio), (os.path.join(fake_bin, "ollama"), ollama)]
+        for path, present in stubs:
+            if present:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    f.write("#!/bin/sh\nexit 0\n")
+                os.chmod(path, 0o755)
+            elif os.path.exists(path):
+                os.remove(path)
+        env = {"HOME": home, "PATH": f"{fake_bin}:/usr/bin:/bin"}
+        return subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), *args], capture_output=True, text=True,
+                              env=env, stdin=subprocess.DEVNULL)
+
+    def test_backend_choice_is_saved(self):
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        saved = os.path.join(home, ".flashcat", "backend")
+        for name in ("ollama", "lmstudio"):
+            result = self.launcher(home, "--backend", name)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(saved) as f:
+                self.assertEqual(f.read(), name + "\n")
+        self.assertEqual(self.launcher(home, "--backend", "chatgpt").returncode, 2)
+        result = self.launcher(home, "--backend", "ollama", ollama=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not installed", result.stderr)
+        with open(saved) as f:
+            self.assertEqual(f.read(), "lmstudio\n")  # unchanged
+
     def test_launcher_rejects_unknown_options(self):
         result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), "--frobnicate"],
                                 capture_output=True, text=True)

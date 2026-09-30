@@ -17,8 +17,9 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** (both on the
    [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
    `lms` command and the local server that Flashcat uses, and they can be installed side by side.
-   Already using **[Ollama](https://ollama.com)**? That works too – Flashcat uses it when LM Studio is
-   not installed (or when you set `FLASHCAT_BACKEND=ollama`).
+   Already using **[Ollama](https://ollama.com)**? That works too (Gemma 4 there is `gemma4:26b`). If
+   both are installed, Flashcat asks once which one to use and remembers it – change it any time with
+   `flashcat --backend`.
 2. Run this in the terminal:
 
 ```sh
@@ -114,7 +115,7 @@ Then just talk to it:
 | `@file` | attach a file to your message (Tab completes) |
 
 Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
-`flashcat --update`, `flashcat --version`, `flashcat --help`.
+`flashcat --backend` (LM Studio or Ollama), `flashcat --update`, `flashcat --version`, `flashcat --help`.
 
 **Ask once, without a chat:** give the question as an argument. Input you pipe in is attached to it,
 and when the output goes to a file or another program, only the answer is written there:
@@ -135,7 +136,7 @@ and whenever it changes.
 |---|---|
 | `FLASHCAT_CONTEXT` | context size in tokens – default 65536 on Macs with 24 GB or more, 16384 below |
 | `FLASHCAT_API_KEY` | only needed if you turned on *Require authentication* in LM Studio's server settings |
-| `FLASHCAT_BACKEND` | `lmstudio` or `ollama` – default: LM Studio if installed, else Ollama |
+| `FLASHCAT_BACKEND` | `lmstudio` or `ollama` for this start – otherwise the one that is installed, or your choice from `flashcat --backend` when both are |
 
 Flashcat uses the port set in LM Studio's server settings (or Ollama's `OLLAMA_HOST`) automatically.
 With Ollama, Flashcat creates a small copy of the model settings with its context size

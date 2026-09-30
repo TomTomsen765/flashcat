@@ -3,8 +3,9 @@
 # (default: Gemma 4 26B) or Ollama and can work with files in the current folder.
 # Usage: flashcat [options] ["question"]   (with a question: answers once and exits; input can be piped in)
 # Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
-#          name is enough), --models (list installed models), --update (install the newest release), --version,
-#          --help. Type /help inside the chat for commands.
+#          name is enough), --models (list installed models), --backend [lmstudio|ollama] (choose the model
+#          server when both are installed), --update (install the newest release), --version, --help.
+#          Type /help inside the chat for commands.
 # Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
 # unloads it again and stops what Flashcat started (server, LM Studio background service, Ollama), freeing the RAM.
 HERE=${0:A:h}  # the folder with flashcat-chat.py and flashcat-cleanup (~/.local/bin, or Homebrew's folder)
@@ -13,6 +14,7 @@ CLEANUP=$HERE/flashcat-cleanup
 REPO=TomTomsen765/flashcat
 LMS=~/.lmstudio/bin/lms
 STATE=~/.flashcat/active
+BACKEND_FILE=~/.flashcat/backend  # the model server chosen when both are installed
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
 LMS_MODEL=gemma-4-26b-a4b-it-qat
 LMS_MODEL_URL=https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
@@ -30,6 +32,7 @@ Flashcat $(/usr/bin/python3 $CHAT --version | cut -d' ' -f2) – a local AI assi
   -c, --continue              continue the last chat in this folder
   -m, --model <name>          use another model (part of the name is enough)
       --models                list the installed models
+      --backend [name]        choose LM Studio or Ollama (asks without a name)
       --update                install the newest release
       --version               show the version
 
@@ -69,6 +72,49 @@ if [[ $1 == --update ]]; then
   FLASHCAT_REF=$tag exec /bin/bash -c "$installer"
 fi
 
+has_lmstudio() { [[ -x $LMS ]] }
+has_ollama() { (( $+commands[ollama] )) }
+# the default model already downloaded? (checked in the model folders: asking the apps would start them)
+lmstudio_has_model() { [[ -d ~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF ]] }
+ollama_has_model() { [[ -f ${OLLAMA_MODELS:-~/.ollama/models}/manifests/registry.ollama.ai/library/${OLLAMA_MODEL%%:*}/${OLLAMA_MODEL#*:} ]] }
+
+choose_backend() {  # asks which model server to use and saves the answer; prints the choice
+  local l_model="not downloaded yet (15.6 GB)" o_model="not downloaded yet (about 18 GB)" default=1 answer
+  lmstudio_has_model && l_model="Gemma 4 downloaded ✓"
+  ollama_has_model && o_model="Gemma 4 downloaded ✓"
+  if ! lmstudio_has_model && ollama_has_model; then default=2; fi
+  {
+    echo "Flashcat can use LM Studio or Ollama – both are installed."
+    echo "  1  LM Studio   $l_model"
+    echo "  2  Ollama      $o_model"
+  } >&2
+  answer=""
+  [[ -r /dev/tty ]] && read -r "answer?Which one? [1/2, Enter = $default] " </dev/tty 2>/dev/tty
+  case ${answer:-$default} in
+    1|l*|L*) answer=lmstudio ;;
+    2|o*|O*) answer=ollama ;;
+    *) echo "Please answer 1 or 2." >&2; return 1 ;;
+  esac
+  mkdir -p ~/.flashcat && print -r -- $answer > $BACKEND_FILE
+  echo "Using ${${answer:s/lmstudio/LM Studio}:s/ollama/Ollama} from now on. Change it with: flashcat --backend" >&2
+  print -r -- $answer
+}
+
+if [[ $1 == --backend ]]; then
+  case ${2:-} in
+    "")
+      if has_lmstudio && has_ollama; then choose_backend >/dev/null; exit
+      else echo "Only one model server is installed – nothing to choose." >&2; exit 0; fi ;;
+    lmstudio|ollama)
+      if [[ $2 == lmstudio ]] && ! has_lmstudio; then echo "LM Studio is not installed: https://lmstudio.ai/download" >&2; exit 1; fi
+      if [[ $2 == ollama ]] && ! has_ollama; then echo "Ollama is not installed: https://ollama.com" >&2; exit 1; fi
+      mkdir -p ~/.flashcat && print -r -- $2 > $BACKEND_FILE
+      echo "Flashcat uses ${${2:s/lmstudio/LM Studio}:s/ollama/Ollama} from now on." >&2
+      exit 0 ;;
+    *) echo "flashcat --backend lmstudio | ollama (or without a name to choose)" >&2; exit 2 ;;
+  esac
+fi
+
 for arg in "$@"; do
   if [[ $arg == -* && $arg != (-c|--continue|-m|--model|--models) ]]; then
     echo "Unknown option: $arg" >&2
@@ -77,11 +123,18 @@ for arg in "$@"; do
   fi
 done
 
-# which model server: FLASHCAT_BACKEND, else LM Studio if installed, else Ollama
+# which model server: FLASHCAT_BACKEND, else the saved choice, else the one that is installed - if both are,
+# Flashcat asks once (in a terminal) and remembers the answer
 BACKEND=${FLASHCAT_BACKEND:-}
 if [[ -z $BACKEND ]]; then
-  if [[ -x $LMS ]]; then BACKEND=lmstudio
-  elif (( $+commands[ollama] )); then BACKEND=ollama
+  saved=""
+  [[ -f $BACKEND_FILE ]] && saved=$(<$BACKEND_FILE)
+  if { [[ $saved == lmstudio ]] && has_lmstudio } || { [[ $saved == ollama ]] && has_ollama }; then BACKEND=$saved
+  elif has_lmstudio && has_ollama; then
+    if [[ -r /dev/tty ]] && [[ -t 0 || -t 2 ]]; then BACKEND=$(choose_backend) || exit 2
+    else BACKEND=lmstudio; fi  # no terminal to ask in: the default
+  elif has_lmstudio; then BACKEND=lmstudio
+  elif has_ollama; then BACKEND=ollama
   else
     echo "No model server found. Install LM Studio (https://lmstudio.ai/download) or Ollama (https://ollama.com)," >&2
     echo "open it once, then start flashcat again." >&2
