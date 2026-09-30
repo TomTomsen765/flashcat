@@ -47,7 +47,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -1263,7 +1263,15 @@ stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(
 
 
 def loaded_context_length():
-    if BACKEND == "ollama":  # the launcher created the model copy with this context size
+    if BACKEND == "ollama":
+        # the launcher asked for FLASHCAT_CONTEXT; Ollama caps it at the model's maximum, so ask what it loaded
+        try:
+            with urllib.request.urlopen(f"{SERVER}/api/ps", timeout=5) as r:
+                for m in json.load(r).get("models") or []:
+                    if m.get("name") in (MODEL, MODEL + ":latest") and m.get("context_length"):
+                        return int(m["context_length"])
+        except Exception:
+            pass
         try:
             return int(os.environ.get("FLASHCAT_CONTEXT") or 32768)
         except ValueError:
