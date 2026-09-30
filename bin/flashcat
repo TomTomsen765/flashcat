@@ -1,60 +1,174 @@
 #!/bin/zsh
-# Flashcat - a local AI assistant in the terminal (named after Flash the cat). Runs an LM Studio model
-# (default: Gemma 4 26B) and can work with files in the current folder.
+# Flashcat - a local AI assistant in the terminal (named after Flash the cat). Runs a local model through LM Studio
+# (default: Gemma 4 26B) or Ollama and can work with files in the current folder.
+# Usage: flashcat [options] ["question"]   (with a question: answers once and exits; input can be piped in)
 # Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
-#          name is enough), --models (list installed models), --update (install the newest version).
-#          Type /help inside the chat for commands.
+#          name is enough), --models (list installed models), --update (install the newest release), --version,
+#          --help. Type /help inside the chat for commands.
 # Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
-# unloads it again and stops what Flashcat started (server, LM Studio background service), freeing the RAM.
+# unloads it again and stops what Flashcat started (server, LM Studio background service, Ollama), freeing the RAM.
+HERE=${0:A:h}  # the folder with flashcat-chat.py and flashcat-cleanup (~/.local/bin, or Homebrew's folder)
+CHAT=$HERE/flashcat-chat.py
+CLEANUP=$HERE/flashcat-cleanup
+REPO=TomTomsen765/flashcat
 LMS=~/.lmstudio/bin/lms
-# context window in tokens (override per start: FLASHCAT_CONTEXT=32768 flashcat)
-MODEL=gemma-4-26b-a4b-it-qat
 STATE=~/.flashcat/active
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
+LMS_MODEL=gemma-4-26b-a4b-it-qat
+LMS_MODEL_URL=https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
+OLLAMA_MODEL=gemma4:26b
+
+usage() {
+  cat <<EOF
+Flashcat $(/usr/bin/python3 $CHAT --version | cut -d' ' -f2) – a local AI assistant for your terminal
+
+  flashcat                    chat in the current folder
+  flashcat "question"         answer once and exit
+  cat log.txt | flashcat "what went wrong?"
+                              answer about piped input (the answer alone goes to a file or pipe)
+
+  -c, --continue              continue the last chat in this folder
+  -m, --model <name>          use another model (part of the name is enough)
+      --models                list the installed models
+      --update                install the newest release
+      --version               show the version
+
+Settings: FLASHCAT_BACKEND=lmstudio|ollama, FLASHCAT_CONTEXT=<tokens>, FLASHCAT_API_KEY=<key>
+Inside the chat, /help lists the commands.
+EOF
+}
+
+case $1 in
+  --help|-h) usage; exit 0 ;;
+  --version|-V) /usr/bin/python3 $CHAT --version; exit ;;
+esac
 
 if [[ $1 == --update ]]; then
-  # runs the installer from GitHub: replaces Flashcat's files, keeps chats and the downloaded model
-  installer=$(curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh) || {
+  if [[ $HERE == */Cellar/* ]]; then
+    echo "Flashcat was installed with Homebrew – update it with:  brew upgrade flashcat"
+    exit 0
+  fi
+  # the newest release (not the development state on main): runs that release's installer, which replaces
+  # Flashcat's files and keeps chats and the downloaded model
+  tag=$(curl -fsSL https://api.github.com/repos/$REPO/releases/latest 2>/dev/null \
+        | /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null)
+  if [[ -z $tag ]]; then
     echo "Update failed: GitHub could not be reached. Check the internet connection and try again." >&2
     exit 1
+  fi
+  current=$(/usr/bin/python3 $CHAT --version | cut -d' ' -f2)
+  if [[ ${tag#v} == $current && ${FLASHCAT_FORCE_UPDATE:-} != 1 ]]; then
+    echo "Flashcat $current is the newest version."
+    exit 0
+  fi
+  echo "Updating Flashcat $current → ${tag#v} …"
+  installer=$(curl -fsSL https://raw.githubusercontent.com/$REPO/$tag/install.sh) || {
+    echo "Update failed: the installer could not be downloaded. Try again later." >&2
+    exit 1
   }
-  exec /bin/bash -c "$installer"
+  FLASHCAT_REF=$tag exec /bin/bash -c "$installer"
+fi
+
+for arg in "$@"; do
+  if [[ $arg == -* && $arg != (-c|--continue|-m|--model|--models) ]]; then
+    echo "Unknown option: $arg" >&2
+    echo "flashcat --help shows all options." >&2
+    exit 2
+  fi
+done
+
+# which model server: FLASHCAT_BACKEND, else LM Studio if installed, else Ollama
+BACKEND=${FLASHCAT_BACKEND:-}
+if [[ -z $BACKEND ]]; then
+  if [[ -x $LMS ]]; then BACKEND=lmstudio
+  elif (( $+commands[ollama] )); then BACKEND=ollama
+  else
+    echo "No model server found. Install LM Studio (https://lmstudio.ai/download) or Ollama (https://ollama.com)," >&2
+    echo "open it once, then start flashcat again." >&2
+    exit 1
+  fi
+fi
+case $BACKEND in
+  lmstudio) [[ -x $LMS ]] || { echo "LM Studio was not found ($LMS). Install it from https://lmstudio.ai/download" >&2; exit 1; }
+            MODEL=$LMS_MODEL ;;
+  ollama)   (( $+commands[ollama] )) || { echo "Ollama was not found. Install it from https://ollama.com" >&2; exit 1; }
+            MODEL=$OLLAMA_MODEL ;;
+  *)        echo "FLASHCAT_BACKEND must be lmstudio or ollama." >&2; exit 2 ;;
+esac
+export FLASHCAT_BACKEND=$BACKEND
+if [[ $BACKEND == ollama ]]; then
+  OLLAMA_PORT=${${OLLAMA_HOST:-127.0.0.1:11434}##*:}
+  [[ $OLLAMA_PORT == <-> ]] || OLLAMA_PORT=11434
 fi
 
 # in very broad folders (home, /, …) ask before anything is loaded
 if [[ $1 != --models ]]; then
-  /usr/bin/python3 ~/.local/bin/flashcat-chat.py --confirm-folder || exit 0
+  /usr/bin/python3 $CHAT --confirm-folder >&2 || exit 0
   export FLASHCAT_FOLDER_CONFIRMED=1
 fi
 
 mkdir -p $STATE
-# Was LM Studio running before? (checked before the first lms call, which starts its background service)
-if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
-  touch $STATE/service
-fi
 touch $STATE/session.$$
 trap 'exit 129' HUP TERM
 
+# ---------- start the model server if needed (the cleanup stops what was started here) ----------
+if [[ $BACKEND == lmstudio ]]; then
+  # Was LM Studio running before? (checked before the first lms call, which starts its background service)
+  if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
+    touch $STATE/service
+  fi
+elif ! ollama list >/dev/null 2>&1; then
+  ollama serve >~/.flashcat/ollama.log 2>&1 &
+  print -r -- $! > $STATE/ollama-server
+  for i in {1..50}; do ollama list >/dev/null 2>&1 && break; sleep 0.2; done
+fi
+
+installed_models() {
+  if [[ $BACKEND == lmstudio ]]; then
+    $LMS ls --llm --json 2>/dev/null | /usr/bin/python3 -c 'import json, sys; print("\n".join(m["modelKey"] for m in json.load(sys.stdin)))'
+  else
+    ollama list 2>/dev/null | awk 'NR > 1 && $1 !~ /^flashcat-/ {print $1}'
+  fi
+}
+
 if [[ $1 == --models ]]; then
-  $LMS ls --llm 2>/dev/null
-  ~/.local/bin/flashcat-cleanup $$
+  if [[ $BACKEND == lmstudio ]]; then $LMS ls --llm 2>/dev/null; else ollama list 2>/dev/null | grep -v '^flashcat-'; fi
+  $CLEANUP $$
   exit
 fi
 if [[ $1 == --model || $1 == -m ]]; then
-  [[ -n $2 ]] || { echo "Which model? List them with: flashcat --models" >&2; ~/.local/bin/flashcat-cleanup $$; exit 1; }
-  MODEL=$($LMS ls --llm --json 2>/dev/null | /usr/bin/python3 -c '
-import json, sys
+  [[ -n $2 ]] || { echo "Which model? List them with: flashcat --models" >&2; $CLEANUP $$; exit 1; }
+  MODEL=$(installed_models | /usr/bin/python3 -c '
+import sys
 want = sys.argv[1].lower()
-keys = [m["modelKey"] for m in json.load(sys.stdin)]
+keys = [k for k in sys.stdin.read().split() if k]
 hits = [k for k in keys if k.lower() == want] or [k for k in keys if want in k.lower()]
 print(hits[0] if len(hits) == 1 else "")
 sys.exit(0 if len(hits) == 1 else 1)' "$2") || {
     echo "No unique model matches '$2'. Installed models:" >&2
-    $LMS ls --llm >&2 2>/dev/null
-    ~/.local/bin/flashcat-cleanup $$
+    installed_models >&2
+    $CLEANUP $$
     exit 1
   }
   shift 2
+fi
+
+# the default model is missing (e.g. installed with Homebrew): offer the download
+if ! installed_models | grep -qx -- "$MODEL"; then
+  if [[ $BACKEND == lmstudio ]]; then
+    size="15.6 GB"; hint="$LMS get $LMS_MODEL_URL"; get=($LMS get $LMS_MODEL_URL -y)
+  else
+    size="about 18 GB"; hint="ollama pull $MODEL"; get=(ollama pull $MODEL)
+  fi
+  echo "The model $MODEL is not downloaded yet ($size)." >&2
+  answer=""
+  [[ -r /dev/tty ]] && read -r "answer?  Download it now? [Y/N] " </dev/tty 2>/dev/tty
+  if [[ $answer != [yY]* ]]; then
+    echo "Download it later with:  $hint" >&2
+    $CLEANUP $$
+    exit 1
+  fi
+  $get >&2 || { echo "The download failed." >&2; $CLEANUP $$; exit 1; }
 fi
 
 # Watchdog in its own session: runs the cleanup even if the terminal window is closed and every process of
@@ -70,37 +184,61 @@ while True:
     except ProcessLookupError:
         break
     time.sleep(1)
-subprocess.run([os.path.expanduser("~/.local/bin/flashcat-cleanup"), str(parent)],
-               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-' $$ </dev/null >/dev/null 2>&1 &
+subprocess.run([sys.argv[2], str(parent)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+' $$ $CLEANUP </dev/null >/dev/null 2>&1 &
 watchdog_pid=$!
-
-if ! $LMS server status 2>&1 | grep -q "is running"; then
-  $LMS server start >/dev/null 2>&1 || { ~/.local/bin/flashcat-cleanup $$; exit 1; }
-  touch $STATE/server
-fi
-
-# the port LM Studio's server uses (1234 unless changed in LM Studio)
-export FLASHCAT_PORT=$($LMS server status --json 2>/dev/null | /usr/bin/python3 -c \
-  'import json, sys; print(json.load(sys.stdin).get("port") or 1234)' 2>/dev/null || echo 1234)
 
 # context window: 64k on Macs with 24 GB or more, 16k below (can be set with FLASHCAT_CONTEXT)
 if [[ -z ${FLASHCAT_CONTEXT:-} ]]; then
   if (( $(sysctl -n hw.memsize) >= 24 * 1073741824 )); then FLASHCAT_CONTEXT=65536; else FLASHCAT_CONTEXT=16384; fi
 fi
+export FLASHCAT_CONTEXT FLASHCAT_MODEL_NAME=$MODEL
 
-if ! $LMS ps 2>/dev/null | grep -q "^$MODEL "; then
-  echo "Loading $MODEL …"
-  if ! $LMS load $MODEL --context-length $FLASHCAT_CONTEXT --parallel 1 -y >/dev/null 2>&1; then
-    echo "Loading failed." >&2
-    kill $watchdog_pid 2>/dev/null
-    ~/.local/bin/flashcat-cleanup $$
-    exit 1
+if [[ $BACKEND == lmstudio ]]; then
+  if ! $LMS server status 2>&1 | grep -q "is running"; then
+    $LMS server start >/dev/null 2>&1 || { $CLEANUP $$; exit 1; }
+    touch $STATE/server
   fi
-  grep -qx "$MODEL" $STATE/loaded 2>/dev/null || print -r -- "$MODEL" >> $STATE/loaded
+  # the port LM Studio's server uses (1234 unless changed in LM Studio)
+  export FLASHCAT_PORT=$($LMS server status --json 2>/dev/null | /usr/bin/python3 -c \
+    'import json, sys; print(json.load(sys.stdin).get("port") or 1234)' 2>/dev/null || echo 1234)
+  if ! $LMS ps 2>/dev/null | grep -q "^$MODEL "; then
+    echo "Loading $MODEL …" >&2
+    if ! $LMS load $MODEL --context-length $FLASHCAT_CONTEXT --parallel 1 -y >/dev/null 2>&1; then
+      echo "Loading failed." >&2
+      kill $watchdog_pid 2>/dev/null
+      $CLEANUP $$
+      exit 1
+    fi
+    grep -qx "$MODEL" $STATE/loaded 2>/dev/null || print -r -- "$MODEL" >> $STATE/loaded
+  fi
+else
+  export FLASHCAT_PORT=$OLLAMA_PORT
+  # Ollama's OpenAI interface has no context setting, so Flashcat uses a copy of the model with its context size
+  # (a few lines of settings - the model file itself is shared, not copied)
+  RUN_MODEL="flashcat-${MODEL//[^a-zA-Z0-9._-]/-}-$(( FLASHCAT_CONTEXT / 1024 ))k"
+  if ! ollama show $RUN_MODEL >/dev/null 2>&1; then
+    modelfile=$(mktemp)
+    printf 'FROM %s\nPARAMETER num_ctx %s\n' $MODEL $FLASHCAT_CONTEXT > $modelfile
+    ollama create $RUN_MODEL -f $modelfile >/dev/null 2>&1 || { echo "Preparing $MODEL failed." >&2; rm -f $modelfile; kill $watchdog_pid 2>/dev/null; $CLEANUP $$; exit 1; }
+    rm -f $modelfile
+  fi
+  if ! ollama ps 2>/dev/null | grep -q "^$RUN_MODEL "; then
+    echo "Loading $MODEL …" >&2
+    if ! curl -fsS -m 600 http://127.0.0.1:$OLLAMA_PORT/api/generate -d "{\"model\": \"$RUN_MODEL\", \"keep_alive\": -1}" >/dev/null 2>&1; then
+      echo "Loading failed." >&2
+      kill $watchdog_pid 2>/dev/null
+      $CLEANUP $$
+      exit 1
+    fi
+    grep -qx "$RUN_MODEL" $STATE/ollama-loaded 2>/dev/null || print -r -- "$RUN_MODEL" >> $STATE/ollama-loaded
+  fi
+  MODEL=$RUN_MODEL
 fi
 
-/usr/bin/python3 ~/.local/bin/flashcat-chat.py $MODEL "$@"
+/usr/bin/python3 $CHAT $MODEL "$@"
+code=$?
 
 kill $watchdog_pid 2>/dev/null
-~/.local/bin/flashcat-cleanup -v $$
+$CLEANUP -v $$
+exit $code

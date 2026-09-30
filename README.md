@@ -4,7 +4,8 @@
 
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
-the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai) or LM Studio Bionic.
+the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai), LM Studio Bionic
+or [Ollama](https://ollama.com).
 Nothing you ask leaves your computer unless you allow a web request: a private, offline AI chat for your
 MacBook, powered by a local LLM (Google Gemma 4).
 
@@ -16,14 +17,25 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** (both on the
    [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
    `lms` command and the local server that Flashcat uses, and they can be installed side by side.
+   Already using **[Ollama](https://ollama.com)**? That works too – Flashcat uses it when LM Studio is
+   not installed (or when you set `FLASHCAT_BACKEND=ollama`).
 2. Run this in the terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash
 ```
 
-The installer checks your Mac, installs the `flashcat` command into `~/.local/bin` and downloads the
-default model, **Gemma 4 26B** (about 15.6 GB), through LM Studio.
+The installer checks your Mac, installs the newest release of the `flashcat` command into `~/.local/bin`
+and downloads the default model, **Gemma 4 26B** (about 15.6 GB), through LM Studio (with Ollama:
+`gemma4:26b`, about 18 GB).
+
+**With Homebrew** instead:
+
+```sh
+brew install tomtomsen765/tap/flashcat
+```
+
+Flashcat then offers to download the model the first time you start it.
 
 **Requirements:** macOS on Apple Silicon and Apple's command line tools (`xcode-select --install`)
 for Python.
@@ -36,16 +48,17 @@ the files you just read instead of downloading them:
 ```sh
 git clone https://github.com/TomTomsen765/flashcat.git
 cd flashcat
-less install.sh          # what it does, in about 140 lines
+less install.sh          # what it does, in about 170 lines
 bash install.sh
 ```
 
 What the installer changes on your Mac, and nothing else:
 
 - copies `flashcat`, `flashcat-chat.py` and `flashcat-cleanup` from `bin/` into `~/.local/bin`
+  (from the folder you downloaded; the `curl` command above downloads the newest release instead)
 - adds `~/.local/bin` to your `PATH` in `~/.zshrc`, if it isn't there yet
 - installs the Python package `pygments` for colored code (`pip install --user`, optional)
-- downloads the model through LM Studio (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
+- downloads the model through LM Studio or Ollama (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
 
 Flashcat itself is one Python file using only the standard library
 ([`bin/flashcat-chat.py`](bin/flashcat-chat.py)) and a short launcher ([`bin/flashcat`](bin/flashcat)).
@@ -89,8 +102,11 @@ Then just talk to it:
 | Command | |
 |---|---|
 | `/help` | all commands |
-| `/undo` | undo the last file change |
+| `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
 | `/copy`, `/save` | copy or save the last answer |
+| `/export` | save the whole chat as a Markdown file |
+| `/paste` | attach the image in the clipboard, e.g. a screenshot |
+| `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
 | `/compact` | summarize the chat to free context |
 | `/think` | think more thoroughly (slower) |
@@ -98,7 +114,16 @@ Then just talk to it:
 | `@file` | attach a file to your message (Tab completes) |
 
 Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
-`flashcat --update`.
+`flashcat --update`, `flashcat --version`, `flashcat --help`.
+
+**Ask once, without a chat:** give the question as an argument. Input you pipe in is attached to it,
+and when the output goes to a file or another program, only the answer is written there:
+
+```sh
+flashcat "Which of these PDFs is the newest invoice?"
+cat error.log | flashcat "What went wrong?"
+git diff | flashcat "Write a commit message for this" > message.txt
+```
 
 Put standing instructions into a `FLASHCAT.md` in your project folder (or `~/.flashcat/FLASHCAT.md`
 for all folders). A folder's `FLASHCAT.md` is shown and only loaded after you agree – the first time
@@ -110,8 +135,11 @@ and whenever it changes.
 |---|---|
 | `FLASHCAT_CONTEXT` | context size in tokens – default 65536 on Macs with 24 GB or more, 16384 below |
 | `FLASHCAT_API_KEY` | only needed if you turned on *Require authentication* in LM Studio's server settings |
+| `FLASHCAT_BACKEND` | `lmstudio` or `ollama` – default: LM Studio if installed, else Ollama |
 
-Flashcat uses the port set in LM Studio's server settings automatically.
+Flashcat uses the port set in LM Studio's server settings (or Ollama's `OLLAMA_HOST`) automatically.
+With Ollama, Flashcat creates a small copy of the model settings with its context size
+(`flashcat-gemma4-26b-64k`, a few bytes – the model itself is not copied).
 Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
 
 **Troubleshooting:** open LM Studio once, check that the model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
@@ -122,11 +150,15 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   rename and move files
 - **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
 - **Images:** describes and analyzes pictures in the folder
-- **Coding:** reads, explains, writes and fixes code in the folder – you confirm every change. It is
+- **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one
+  confirmation for the whole list, one `/undo` for all of it
+- **Coding:** reads, explains, writes and fixes code in the folder, and **runs your tests, scripts and
+  builds** to check its work (in a sandbox, after you confirm the command). It is
   no [Claude Code](https://claude.com/claude-code), but it does a solid job on simple tasks, and it is
   free and runs entirely on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
-- **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names
+- **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
+  screenshots via `/paste`; one-off questions with `flashcat "…"` and piped input
 
 ## Safety
 
@@ -142,7 +174,15 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   browser data, mail, messages) and private key files (`id_rsa`, `*.pem`, …). If you really need one
   of them, Flashcat asks first – in red – and unlocks only that item, only for the current chat.
 - Starting it in your home folder asks first – before the model is even loaded.
-- It cannot delete files or run commands, and moving never overwrites anything.
+- Moving never overwrites anything. Flashcat itself cannot delete files – only a command you confirmed can.
+
+**Commands run in a sandbox**
+- Every command is shown in full before you answer `Y`. Commands that can delete or overwrite files
+  (`rm`, `mv`, `>`, `git reset`, …) are marked in red – `/undo` cannot bring back what a command changed.
+- The macOS sandbox enforces the rules, whatever the command does: **no internet** (not even name
+  lookups), **writing only inside the start folder** (never its backups), no reading of your other files,
+  private data and key files, no opening apps or web pages, no clipboard, no keychain. Commands are
+  stopped after 2 minutes (at most 10) and cannot ask for input.
 
 **Every change asks first**
 - You see a preview of every new file and every change before you answer `Y`. Long previews are
@@ -162,12 +202,14 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   allow it – and again whenever it changes.
 
 **Your data stays on your Mac**
-- The model runs locally in LM Studio. Chats are stored only in `~/.flashcat`, readable only by your
-  user account. LM Studio is unloaded again when the last Flashcat window closes, so the memory is freed.
+- The model runs locally in LM Studio or Ollama. Chats are stored only in `~/.flashcat`, readable only by
+  your user account. The model is unloaded again when the last Flashcat window closes, so the memory is freed.
 
 **Installing and updating**
 - The installer only does what it describes. If the download breaks off, nothing runs at all.
-  `flashcat --update` uses the same installer and keeps your chats and the model.
+- You only get **published releases**, never the work in progress on the `main` branch:
+  the installer and `flashcat --update` fetch the newest release. Every change is checked by automated
+  safety tests on GitHub before it is released.
 
 Found a security problem? Please report it privately – see [SECURITY.md](SECURITY.md).
 
@@ -181,7 +223,8 @@ Found a security problem? Please report it privately – see [SECURITY.md](SECUR
 flashcat --update
 ```
 
-Installs the newest version. Your chats, settings and the downloaded model stay.
+Installs the newest release (and tells you if you already have it). Your chats, settings and the
+downloaded model stay. Installed with Homebrew? Then use `brew upgrade flashcat`.
 (Versions before this command existed: run the install command once more.)
 
 ## Uninstall

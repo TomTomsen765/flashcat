@@ -1,14 +1,14 @@
 #!/bin/zsh
 # "Last one out turns off the lights": called when a Flashcat session ends (normally or when its window is closed).
-# Unloads the model, stops the server and the LM Studio background service - but only if Flashcat started them
-# and no other Flashcat session is still running.
+# Unloads the model, stops the server and the LM Studio background service (or Ollama) - but only if Flashcat
+# started them and no other Flashcat session is still running.
 # Usage: flashcat-cleanup [-v] <pid of the ending Flashcat session>
 LMS=~/.lmstudio/bin/lms
 STATE=~/.flashcat/active
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
 verbose=
 [[ $1 == -v ]] && { verbose=1; shift }
-say() { [[ -n $verbose ]] && print -r -- "$1" }
+say() { [[ -n $verbose ]] && print -r -- "$1" >&2 }  # stderr: stdout may carry a one-shot answer
 
 rm -f $STATE/session.$1
 for f in $STATE/session.*(N); do
@@ -24,6 +24,16 @@ if [[ -f $STATE/loaded ]]; then
     $LMS unload $model >/dev/null 2>&1 && say "$model unloaded."
   done
   rm -f $STATE/loaded
+fi
+if [[ -f $STATE/ollama-loaded ]]; then
+  for model in ${(f)"$(<$STATE/ollama-loaded)"}; do
+    ollama stop $model >/dev/null 2>&1 && say "$model unloaded."
+  done
+  rm -f $STATE/ollama-loaded
+fi
+if [[ -f $STATE/ollama-server ]]; then
+  kill $(<$STATE/ollama-server) 2>/dev/null && say "Ollama stopped."
+  rm -f $STATE/ollama-server
 fi
 if [[ -f $STATE/server ]]; then
   $LMS server stop >/dev/null 2>&1 && say "LM Studio server stopped."

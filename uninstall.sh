@@ -12,6 +12,14 @@ for f in flashcat flashcat-chat.py flashcat-cleanup; do
   rm -f "$BIN/$f"
 done
 printf '  %s✓%s Flashcat removed from %s\n' "$GREEN" "$RESET" "$BIN"
+if command -v brew >/dev/null 2>&1 && brew list flashcat >/dev/null 2>&1; then
+  printf '  %sInstalled with Homebrew as well – remove that with: brew uninstall flashcat%s\n' "$DIM" "$RESET"
+fi
+if command -v ollama >/dev/null 2>&1; then  # Flashcat's small model settings copies (the model itself stays)
+  for m in $(ollama list 2>/dev/null | awk 'NR > 1 && $1 ~ /^flashcat-/ {print $1}'); do
+    ollama rm "$m" >/dev/null 2>&1 || true
+  done
+fi
 
 if [[ -d $HOME/.flashcat ]]; then
   answer=""

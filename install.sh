@@ -3,15 +3,18 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash
 #
-# Installs flashcat into ~/.local/bin and downloads the default model (Gemma 4 26B, ~15.6 GB) through
-# LM Studio. LM Studio or LM Studio Bionic must be installed first: https://lmstudio.ai/download
-# Options (environment variables): FLASHCAT_SKIP_MODEL=1 skips the model download.
+# Installs the newest release of flashcat into ~/.local/bin and downloads the default model (Gemma 4 26B,
+# ~15.6 GB) through LM Studio (or Ollama). LM Studio, LM Studio Bionic (https://lmstudio.ai/download) or
+# Ollama (https://ollama.com) must be installed first.
+# Options (environment variables): FLASHCAT_SKIP_MODEL=1 skips the model download,
+#   FLASHCAT_REF=<tag or branch> installs that version instead of the newest release.
 { # everything in braces: bash reads it completely before running it, so a download that
   # breaks off in the middle runs nothing instead of half the script
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/TomTomsen765/flashcat/main"
+REPO="TomTomsen765/flashcat"
 MODEL_KEY="gemma-4-26b-a4b-it-qat"
+OLLAMA_MODEL="gemma4:26b"
 MODEL_URL="https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF"
 BIN="$HOME/.local/bin"
 LMS="$HOME/.lmstudio/bin/lms"
@@ -65,9 +68,16 @@ fi
   || fail "Python 3.8 or newer is needed (/usr/bin/python3). Update the command line tools and try again."
 ok "Python $(/usr/bin/python3 -c 'import platform; print(platform.python_version())')"
 
-[[ -x $LMS ]] || fail "LM Studio was not found. Install LM Studio or LM Studio Bionic from ${BOLD}https://lmstudio.ai/download${RESET},
-    open it once, then run this installer again."
-ok "LM Studio"
+if [[ -x $LMS ]]; then
+  backend=lmstudio
+  ok "LM Studio"
+elif command -v ollama >/dev/null 2>&1; then
+  backend=ollama
+  ok "Ollama"
+else
+  fail "No model server found. Install LM Studio or LM Studio Bionic from ${BOLD}https://lmstudio.ai/download${RESET}
+    (or Ollama from ${BOLD}https://ollama.com${RESET}), open it once, then run this installer again."
+fi
 
 # ---------- program files ----------
 step "Installing Flashcat"
@@ -75,6 +85,17 @@ mkdir -p "$BIN"
 here=""  # set when run from a downloaded copy of the repository (not when piped from curl)
 if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+if [[ -z $here ]]; then
+  # downloaded: install a published release, not the development state of the main branch
+  ref=${FLASHCAT_REF:-}
+  if [[ -z $ref ]]; then
+    ref=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+          | /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null) \
+      || fail "GitHub could not be reached. Check the internet connection and try again."
+  fi
+  REPO_RAW="https://raw.githubusercontent.com/$REPO/$ref"
+  note "version ${ref#v}"
 fi
 for f in "${FILES[@]}"; do
   if [[ -n $here && -f $here/bin/$f ]]; then  # running from a downloaded copy of the repository
@@ -106,7 +127,19 @@ fi
 step "Model"
 service_running_before=1
 pgrep -f "$SERVICE_PATTERN" >/dev/null || pgrep -xq "LM Studio|Bionic" || service_running_before=
-if "$LMS" ls --llm --json 2>/dev/null | grep -q "\"$MODEL_KEY\""; then
+if [[ $backend == ollama ]]; then
+  if ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
+    ok "Gemma 4 26B is already downloaded"
+  elif [[ ${FLASHCAT_SKIP_MODEL:-} == 1 ]]; then
+    note "Skipped. Download it later with:  ollama pull $OLLAMA_MODEL (or when flashcat starts)"
+  elif ! ollama list >/dev/null 2>&1; then
+    note "Ollama is not running, so the model is not downloaded now – flashcat offers it on the first start."
+  else
+    note "Downloading Gemma 4 26B (about 18 GB) through Ollama – this can take a while."
+    ollama pull "$OLLAMA_MODEL" || fail "The model download failed. Try again later or run:  ollama pull $OLLAMA_MODEL"
+    ok "Gemma 4 26B downloaded"
+  fi
+elif "$LMS" ls --llm --json 2>/dev/null | grep -q "\"$MODEL_KEY\""; then
   ok "Gemma 4 26B is already downloaded"
 elif [[ ${FLASHCAT_SKIP_MODEL:-} == 1 ]]; then
   note "Skipped. Download it later with:  $LMS get $MODEL_URL"
@@ -115,7 +148,7 @@ else
   "$LMS" get "$MODEL_URL" -y || fail "The model download failed. Try again later or run:  $LMS get $MODEL_URL"
   ok "Gemma 4 26B downloaded"
 fi
-if [[ -z $service_running_before ]]; then  # leave LM Studio as we found it
+if [[ $backend == lmstudio && -z $service_running_before ]]; then  # leave LM Studio as we found it
   sleep 1
   pkill -TERM -f "$SERVICE_PATTERN" 2>/dev/null || true
 fi
@@ -123,7 +156,7 @@ fi
 # ---------- done ----------
 cat <<EOF
 
-  ${GREEN}✓${RESET} ${BOLD}Flashcat is installed.${RESET}
+  ${GREEN}✓${RESET} ${BOLD}Flashcat $("$BIN/flashcat" --version | cut -d' ' -f2) is installed.${RESET}
 
   Change into a project folder and start it:
       ${ORANGE}cd ~/Documents/my-project${RESET}

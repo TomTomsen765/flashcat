@@ -6,7 +6,7 @@
 <title>Flashcat – a local AI assistant for your Mac terminal</title>
 <meta name="description" content="Flashcat is a private, offline AI assistant for the macOS terminal. It reads and writes files, PDFs, Word and Excel, looks at images and searches the web – with a model that runs on your own Mac.">
 <meta property="og:title" content="Flashcat – a local AI assistant for your Mac terminal">
-<meta property="og:description" content="Private and offline: a local LLM (Gemma 4) through LM Studio, right in your terminal. Free and open source.">
+<meta property="og:description" content="Private and offline: a local LLM (Gemma 4) through LM Studio or Ollama, right in your terminal. Free and open source.">
 <meta property="og:image" content="https://tomtomsen765.github.io/flashcat/social-preview.png">
 <meta property="og:url" content="https://tomtomsen765.github.io/flashcat/">
 <meta name="twitter:card" content="summary_large_image">
@@ -206,7 +206,7 @@
         <p class="tagline">A local AI assistant for your Mac terminal – private and offline.</p>
         <div class="chips">
           <span class="chip">PDF · Word · Excel</span>
-          <span class="chip">LM Studio</span>
+          <span class="chip">LM Studio · Ollama</span>
           <span class="chip">Gemma 4</span>
           <span class="chip">MacBook · Apple Silicon</span>
           <span class="chip">Free &amp; open source</span>
@@ -230,20 +230,21 @@
       <div class="grid">
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">.md</span>
           <h3>Files</h3><p>List, read, search, create and change text files. Create Word and PDF documents,
-            rename and move files.</p></div>
+            rename and move files – many at once, undone in one step.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">PDF</span>
           <h3>Documents</h3><p>Reads PDF, Word and Excel – even scanned PDFs and images, through the text
             recognition built into macOS.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">JPG</span>
           <h3>Images</h3><p>Describes and analyzes the pictures in your folder.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">&lt;/&gt;</span>
-          <h3>Coding</h3><p>Reads, explains, writes and fixes code – you confirm every change. It is no
-            Claude Code, but it does a solid job on simple tasks, free and fully on your Mac.</p></div>
+          <h3>Coding</h3><p>Reads, explains, writes and fixes code, and runs your tests and scripts in a sandbox
+            to check its work – you confirm every change and every command. It is no Claude Code, but it does a
+            solid job on simple tasks, free and fully on your Mac.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">WWW</span>
           <h3>Web</h3><p>Searches the web (DuckDuckGo) and reads web pages – only after you say yes.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">❯_</span>
-          <h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. File names
-            are clickable.</p></div>
+          <h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. Paste screenshots
+            with <code>/paste</code>, or ask once without a chat: <code>cat log | flashcat "why?"</code></p></div>
       </div>
     </section>
 
@@ -255,14 +256,15 @@
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Your files</h3>
           <p>Only the start folder and its subfolders. Hidden files in your home folder, <code>~/Library</code>
-            and private keys are locked. Flashcat cannot delete files or run commands.</p></div>
+            and private keys are locked. Commands run in a sandbox: no internet, and they can only write inside
+            the folder.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Every change asks first</h3>
-          <p>You see a preview before you answer <code>Y</code>. The old version is backed up, and
-            <code>/undo</code> reverts the last change.</p></div>
+          <p>You see a preview – or the full command – before you answer <code>Y</code>. The old version is
+            backed up, and <code>/undo</code> reverts the last change.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Stays on your Mac</h3>
-          <p>The model runs locally in LM Studio. Nothing leaves your computer unless you allow a web
+          <p>The model runs locally in LM Studio or Ollama. Nothing leaves your computer unless you allow a web
             request – and you always see the full address first.</p></div>
       </div>
       <p class="note">All details: <a href="https://github.com/TomTomsen765/flashcat#safety">Safety in the README</a>
@@ -293,14 +295,16 @@
       <div class="install">
         <ol>
           <li>Install <a href="https://lmstudio.ai/download">LM Studio</a> or
-            <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> and open it once.</li>
+            <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> (or
+            <a href="https://ollama.com">Ollama</a>) and open it once.</li>
           <li>Run this in the terminal:
             <div class="cmd"><code id="cmd">curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash</code>
               <button class="copy" type="button" data-copy="cmd">Copy</button></div>
           </li>
           <li>Go to a folder and start it: <code>cd ~/Documents &amp;&amp; flashcat</code></li>
         </ol>
-        <p class="small">The installer downloads the default model (about 15.6 GB) through LM Studio.
+        <p class="small">The installer downloads the default model (about 15.6 GB) through LM Studio (or Ollama).
+          With Homebrew: <code>brew install tomtomsen765/tap/flashcat</code>.
           Prefer to read the code before running it?
           <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a>
           Update later with <code>flashcat --update</code>.</p>

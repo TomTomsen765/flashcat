@@ -1,0 +1,19 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # the same Python that Flashcat uses on every Mac (Apple's command line tools)
+      - name: Safety and feature tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Python 3.9 compatible
+        run: /usr/bin/python3 -m py_compile bin/flashcat-chat.py

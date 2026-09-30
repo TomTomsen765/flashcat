@@ -4,11 +4,14 @@
 Named after Flash the cat.
 
 Tools: list, read (text/PDF/Word/Excel, scans via macOS text recognition), search, write + edit (text
-files), write Word and PDF documents, move/rename, view images, fetch web pages, web search. Every change is confirmed by the
-user, backed up and can be undone with /undo. File access is sandboxed to the folder the chat was
-started in. Talks to LM Studio's OpenAI-compatible server on localhost (port from FLASHCAT_PORT). Stdlib only.
+files), write Word and PDF documents, move/rename, view images, run commands (in a sandbox), fetch web pages,
+web search. Every change is confirmed by the user, backed up and can be undone with /undo. File access is limited
+to the folder the chat was started in. Talks to the OpenAI-compatible server of LM Studio or Ollama on localhost
+(port from FLASHCAT_PORT). Stdlib only.
 
-Usage: flashcat-chat.py MODEL [--continue]
+Usage: flashcat-chat.py MODEL [--continue] [QUESTION …]
+       (with a question: answers once and exits; piped input is attached to the question)
+       flashcat-chat.py --version | --confirm-folder
 """
 
 import base64
@@ -44,12 +47,16 @@ try:
 except ImportError:
     pass
 
-SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or 1234}"
+VERSION = "1.3.0"
+BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
+SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
 URL = SERVER + "/v1/chat/completions"
-MODEL = sys.argv[1]
+MODEL = sys.argv[1] if len(sys.argv) > 1 else ""
+MODEL_NAME = os.environ.get("FLASHCAT_MODEL_NAME") or MODEL  # shown name (Ollama runs a copy with Flashcat's context size)
 NAME = "Flashcat"
 RESUME = any(a in ("--continue", "-c") for a in sys.argv[2:])
+QUESTION = " ".join(a for a in sys.argv[2:] if a not in ("--continue", "-c")).strip()  # one-shot mode
 ROOT = os.path.realpath(os.getcwd())
 HOME_DIR = os.path.expanduser("~/.flashcat")
 FOLDER_ID = hashlib.sha1(ROOT.encode()).hexdigest()[:16]
@@ -77,13 +84,17 @@ SYSTEM = (
     "via text recognition), look at images (view_image), search the internet (web_search) and read web pages "
     "(fetch_url). For information from the internet, name the source with its address (URL). "
     "You create text files (e.g. .txt, .md, .csv) with write_file or change them precisely with edit_file; "
-    "you create Word documents (.docx) with write_docx and PDF documents with write_pdf; rename or move files with move_file. "
+    "you create Word documents (.docx) with write_docx and PDF documents with write_pdf; rename or move files with move_file "
+    "(several at once with move_files). "
     "For changes to existing text files use edit_file: read the file first and give old_text exactly "
     "as it appears in the file. "
-    "IMPORTANT: The writing and internet tools ask the user for confirmation themselves. "
+    "You can run terminal commands with run_command (zsh, in this folder) - e.g. to run tests, scripts or "
+    "builds and then fix what fails. They run in a sandbox: no internet, writing only inside this folder. "
+    "Never use commands to delete or overwrite files unless the user asked for exactly that; change files with "
+    "edit_file / write_file, which keep a backup. "
+    "IMPORTANT: The writing, command and internet tools ask the user for confirmation themselves. "
     "So NEVER ask in the chat 'Shall I …?', but call the right tool right away "
-    "as soon as the user wants something written, changed or moved. "
-    "You cannot delete anything or run commands. "
+    "as soon as the user wants something written, changed, moved or run. "
     "Private data (hidden settings and keys in the home folder, ~/Library, key files) is blocked; only access it "
     "when the user explicitly asks for it - the user is then asked to allow it."
 )
@@ -152,6 +163,25 @@ TOOLS = [
             "destination": {"type": "string", "description": "Relative new path (or an existing target folder)"}},
             "required": ["source", "destination"]}}},
     {"type": "function", "function": {
+        "name": "move_files",
+        "description": "Renames or moves several files or folders in one step (e.g. renaming all photos). Never "
+                       "overwrites anything. The user confirms the whole list once; /undo reverts all of it.",
+        "parameters": {"type": "object", "properties": {
+            "moves": {"type": "array", "items": {"type": "object", "properties": {
+                "source": {"type": "string", "description": "Relative current path"},
+                "destination": {"type": "string", "description": "Relative new path (or an existing target folder)"}},
+                "required": ["source", "destination"]}}},
+            "required": ["moves"]}}},
+    {"type": "function", "function": {
+        "name": "run_command",
+        "description": "Runs a terminal command (zsh) in the start folder and returns its output and exit code - "
+                       "e.g. tests, scripts, builds, git status. Runs in a sandbox: no internet, it can only write "
+                       "inside the folder, no private data. Not interactive (no input). The user confirms first.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string", "description": "The command line, e.g. 'python3 -m unittest'"},
+            "timeout": {"type": "integer", "description": "Seconds until the command is stopped, default 120, max 600"}},
+            "required": ["command"]}}},
+    {"type": "function", "function": {
         "name": "view_image",
         "description": "Shows you an image from the folder (jpg, png, gif, webp, heic, …) so you can describe or analyze it.",
         "parameters": {"type": "object", "properties": {
@@ -192,6 +222,21 @@ def inside(path, folder):
 
 
 private_ok = set()  # private items the user unlocked in this chat
+TTY_ANSWERS = False  # set when stdin carries piped data (one-shot mode): answers then come from the terminal
+
+
+def ask(prompt):
+    """The user's answer to a question. With piped input the answer is read from the terminal; without a terminal
+    there is no answer, which every question treats as No."""
+    if sys.stdin.isatty() or not TTY_ANSWERS:
+        return input(prompt)
+    try:
+        with open("/dev/tty", "r+") as t:
+            t.write(prompt)
+            t.flush()
+            return t.readline().rstrip("\n")
+    except OSError:
+        return ""
 
 
 def private_item(full):
@@ -223,7 +268,7 @@ def confirm_private(item, what="Allow access for this chat?"):
         f"{RED}Only allow it if you asked for it yourself –{RESET}",
         f"{RED}a document or web page could have tricked the model.{RESET}"], color=RED))
     try:
-        answer = input(f"  {RED}? {what} [Y/N]{RESET} ").strip().lower()
+        answer = ask(f"  {RED}? {what} [Y/N]{RESET} ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = ""
     return answer in ("y", "yes")
@@ -529,7 +574,7 @@ def confirm(question, show_all=None):
     ui_break()
     choices = "[Y/N/A = show all]" if show_all else "[Y/N]"
     try:
-        answer = input(f"  {ORANGE}?{RESET} {question} {DIM}{choices}{RESET} ").strip().lower()
+        answer = ask(f"  {ORANGE}?{RESET} {question} {DIM}{choices}{RESET} ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = ""
     if show_all and answer in ("a", "all"):
@@ -748,22 +793,40 @@ def write_pdf(path, content):
         return save_with_backup(full, rel, source_file=out)
 
 
-def move_file(source, destination):
+def plan_move(source, destination):
+    """Checks one move. Returns (src, dst, src_rel, dst_rel) or raises ValueError with the reason."""
     src = resolve(source, ask=True)
     if src == ROOT:
-        return "Refused: the start folder itself cannot be moved."
-    if not os.path.exists(src):
-        return f"Error: {source} does not exist."
+        raise ValueError("Refused: the start folder itself cannot be moved.")
+    if not os.path.lexists(src):
+        raise ValueError(f"Error: {clean(source)} does not exist.")
     dst = resolve(destination, ask=True)
-    if os.path.isdir(dst):
+    if os.path.isdir(dst) or destination.endswith("/"):  # "folder/" means into that folder, even a new one
         dst = os.path.join(dst, os.path.basename(src))
     src_rel, dst_rel = clean(os.path.relpath(src, ROOT)), clean(os.path.relpath(dst, ROOT))
     if in_backup(src_rel) or in_backup(dst_rel):
-        return "Refused: the backup folder is off limits."
-    if os.path.exists(dst):
-        return f"Refused: {dst_rel} already exists – nothing is overwritten."
+        raise ValueError("Refused: the backup folder is off limits.")
+    if os.path.lexists(dst):
+        raise ValueError(f"Refused: {dst_rel} already exists – nothing is overwritten.")
     if dst.startswith(src + os.sep):
-        return "Refused: a folder cannot be moved into itself."
+        raise ValueError("Refused: a folder cannot be moved into itself.")
+    return src, dst, src_rel, dst_rel
+
+
+def do_move(src, dst, src_rel, dst_rel):
+    if os.path.lexists(dst):  # appeared since the check: never overwrite or move into it
+        raise ValueError(f"Refused: {dst_rel} already exists – nothing is overwritten.")
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(src, dst)
+    stats["moved"] += 1
+    return {"src": src, "dst": dst, "src_rel": src_rel, "dst_rel": dst_rel}
+
+
+def move_file(source, destination):
+    try:
+        src, dst, src_rel, dst_rel = plan_move(source, destination)
+    except ValueError as e:
+        return str(e)
     rename = os.path.dirname(src) == os.path.dirname(dst)
     ui_break()
     print()
@@ -771,12 +834,72 @@ def move_file(source, destination):
     if not confirm("Rename?" if rename else "Move?"):
         print()
         return "The user declined. Nothing was moved."
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.move(src, dst)
-    journal.append({"type": "move", "src": src, "dst": dst, "src_rel": src_rel, "dst_rel": dst_rel})
-    stats["moved"] += 1
+    journal.append({"type": "move", **do_move(src, dst, src_rel, dst_rel)})
     print(f"  {GREEN}✓{RESET} {DIM}moved:{RESET} {src_rel} {DIM}→{RESET} {file_link(dst_rel)}")
     return f"Moved: {src_rel} → {dst_rel}"
+
+
+MAX_MOVES = 500
+
+
+def move_files(moves):
+    """Several moves, checked completely first, confirmed once and undone together."""
+    if not isinstance(moves, list) or not moves:
+        return "Error: moves must be a non-empty list of {source, destination}."
+    if len(moves) > MAX_MOVES:
+        return f"Refused: at most {MAX_MOVES} moves at once."
+    plan, sources, targets = [], set(), set()
+    for m in moves:
+        if not isinstance(m, dict):
+            return "Error: every entry needs source and destination."
+        try:
+            src, dst, src_rel, dst_rel = plan_move(str(m.get("source") or ""), str(m.get("destination") or ""))
+        except ValueError as e:
+            return f"{e} (in the entry {clean(str(m.get('source')))}; nothing was moved)"
+        # compared in lower case: macOS ignores case, so two targets differing only in case are the same file
+        if src.lower() in sources or dst.lower() in targets or dst.lower() in sources or src.lower() in targets:
+            return (f"Refused: {src_rel} → {dst_rel} collides with another entry of the list (same source or target, "
+                    "or a chain of moves). Nothing was moved.")
+        if any(inside(dst, p[0]) or inside(p[1], src) or inside(dst, p[1]) or inside(p[1], dst) for p in plan):
+            return f"Refused: {src_rel} → {dst_rel} moves into or out of another moved folder. Nothing was moved."
+        sources.add(src.lower())
+        targets.add(dst.lower())
+        plan.append((src, dst, src_rel, dst_rel))
+    lines = [f"{src_rel}  {DIM}→{RESET}  {dst_rel}" for _, _, src_rel, dst_rel in plan]
+    title = f"moves {plural(len(plan), 'item')}"
+
+    def show(limit=20):
+        ui_break()
+        body = lines[:limit] if limit else lines
+        if limit and len(lines) > limit:
+            body = body + [f"{DIM}… {plural(len(lines) - limit, 'more line')} (A shows all){RESET}"]
+        print()
+        print(card(f"{ORANGE}{title}{RESET}", body))
+
+    show()
+    if not confirm(f"Move {plural(len(plan), 'item')}?", (lambda: show(None)) if len(lines) > 20 else None):
+        print()
+        return "The user declined. Nothing was moved."
+    done = []
+    try:
+        for step in plan:
+            done.append(do_move(*step))
+    finally:
+        if done:
+            journal.append({"type": "batch", "moves": done})
+    print(f"  {GREEN}✓{RESET} {DIM}moved:{RESET} {plural(len(done), 'item')}")
+    return f"Moved {plural(len(done), 'item')}:\n" + "\n".join(f"{d['src_rel']} → {d['dst_rel']}" for d in done)
+
+
+def describe(e):
+    """What undoing journal entry `e` does, in words."""
+    if e["type"] == "move":
+        return f"move {e['dst_rel']} back to {e['src_rel']}"
+    if e["type"] == "batch":
+        return f"move {plural(len(e['moves']), 'item')} back ({e['moves'][0]['dst_rel']} → {e['moves'][0]['src_rel']}, …)"
+    if e["backup"]:
+        return f"restore {clean(e['rel'])} to the version before the change"
+    return f"remove the newly created file {clean(e['rel'])} (a copy goes to {BACKUP_DIR})"
 
 
 def undo():
@@ -785,21 +908,19 @@ def undo():
         print("Nothing has been changed in this chat that could be undone.\n")
         return None
     e = journal[-1]
-    if e["type"] == "move":
-        desc = f"move {e['dst_rel']} back to {e['src_rel']}"
-    elif e["backup"]:
-        desc = f"restore {clean(e['rel'])} to the version before the change"
-    else:
-        desc = f"remove the newly created file {clean(e['rel'])} (a copy goes to {BACKUP_DIR})"
+    desc = describe(e)
     if not confirm(f"Undo: {desc}?"):
         print()
         return None
-    if e["type"] == "move":
-        if os.path.exists(e["src"]):
-            print(f"Not possible: {e['src_rel']} exists again by now.\n")
+    if e["type"] in ("move", "batch"):
+        moves = e["moves"] if e["type"] == "batch" else [e]
+        blocked = [m["src_rel"] for m in moves if os.path.lexists(m["src"]) or not os.path.lexists(m["dst"])]
+        if blocked:
+            print(f"Not possible: {blocked[0]} exists again by now (or its moved version is gone).\n")
             return None
-        os.makedirs(os.path.dirname(e["src"]), exist_ok=True)
-        shutil.move(e["dst"], e["src"])
+        for m in reversed(moves):
+            os.makedirs(os.path.dirname(m["src"]), exist_ok=True)
+            shutil.move(m["dst"], m["src"])
     elif e["backup"]:
         if os.path.exists(e["full"]):
             backup_copy(e["full"], e["rel"], "before-undo")
@@ -810,6 +931,182 @@ def undo():
     stats["undone"] += 1
     print(f"  {GREEN}✓{RESET} {DIM}undone:{RESET} {desc}\n")
     return desc
+
+
+def show_journal():
+    if not journal:
+        print("Nothing has been changed in this chat that could be undone.\n")
+        return
+    for i, e in enumerate(reversed(journal), 1):
+        print(f"  {i:>2}. {describe(e)}{DIM}{'  ◀ next /undo' if i == 1 else ''}{RESET}")
+    print(f"{DIM}  /undo reverts them one by one, newest first{RESET}\n")
+
+
+# ---------- commands (confirmed, sandboxed) ----------
+
+RUN_TIMEOUT, RUN_MAX_TIMEOUT = 120, 600
+MAX_OUTPUT = 20_000
+MAX_COMMAND = 2000
+# developer tools installed in the home folder that commands may read (not private: programs, no secrets)
+TOOLCHAINS = [".local/bin", ".local/lib", ".local/pipx", ".cargo", ".rustup", ".nvm", ".pyenv", ".rbenv", ".volta",
+              ".bun", ".deno", ".sdkman", ".gitconfig", ".config/git", "go", "Library/Python"]
+DESTRUCTIVE = re.compile(r"(^|[\s;&|(`])(rm|rmdir|mv|dd|truncate|shred|unlink|find\s.*-delete|"
+                         r"git\s+(reset|clean|checkout|restore|stash|rebase|push\s+-f))\b|(^|[^-=>&0-9])>(?![&>]|\s*/dev/null)")
+
+
+def sb_string(path):
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def sb_regex(path):
+    """`path` as a literal inside a sandbox regular expression."""
+    return re.sub(r'([.^$*+?()\[\]{}|\\"])', r"\\\1", path)
+
+
+def any_case(text):
+    """Regular expression matching `text` in upper or lower case (macOS ignores case in file names)."""
+    return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else sb_regex(c) for c in text)
+
+
+def sandbox_profile():
+    """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and temporary
+    folders, no reading of user files outside the start folder (home folders, other users, external drives - system
+    files and developer tools stay readable), private data and key files blocked like for the other tools, no
+    opening apps or URLs, no clipboard, no keychain."""
+    home, root = HOME, ROOT
+    tmp = sorted({os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/private/var/tmp"})
+    private = f'(regex #"^{sb_regex(home)}/\\.") (subpath {sb_string(os.path.join(home, "Library"))})'
+    top = os.path.relpath(root, home).split(os.sep)[0] if inside(root.lower(), home.lower()) else ""
+    root_private = top.startswith(".") and top != "." or top.lower() == "library"  # started inside e.g. ~/.config
+    keys = ("(id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]*\\.(" + "|".join(any_case(e) for e in
+            ("pem", "p12", "pfx", "keychain", "keychain-db")) + ")|" + any_case(".netrc") + "|" +
+            any_case(".git-credentials") + ")")
+    rules = [
+        "(version 1)",
+        "(allow default)",
+        "(deny network*)",
+        "(deny lsopen)",
+        "(deny appleevent-send)",
+        '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") '
+        '(global-name "com.apple.coreservices.quarantine-resolver") (global-name "com.apple.pasteboard.1") '
+        '(global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc") '
+        '(global-name "com.apple.secd"))',
+        # reading: no user files except the start folder and developer tools
+        f"(deny file-read-data (subpath {sb_string(home)}) (subpath \"/Users\") (subpath \"/Volumes\"))",
+        f"(allow file-read-data (subpath {sb_string(root)}))",
+        f"(deny file-read-data {private})",
+        "(allow file-read-data " + " ".join(f"(subpath {sb_string(os.path.join(home, t))})" for t in TOOLCHAINS) + ")",
+        # writing: only the start folder and temporary folders, never private data or the backups
+        "(deny file-write*)",
+        f"(allow file-write* (subpath {sb_string(root)}) "
+        + " ".join(f"(subpath {sb_string(t)})" for t in tmp)
+        + ' (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+        f"(deny file-write* {private})",
+    ]
+    if root_private:  # started there on purpose: the start folder itself stays usable
+        rules.append(f"(allow file-read-data file-write* (subpath {sb_string(root)}))")
+    rules += [
+        f'(deny file-read-data file-write* (regex #"/{keys}$"))',
+        f"(deny file-write* (subpath {sb_string(os.path.join(root, BACKUP_DIR))}))",
+    ]
+    return "\n".join(rules)
+
+
+def command_env():
+    env = dict(os.environ)
+    env.pop("FLASHCAT_API_KEY", None)
+    env.update(PAGER="cat", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0", NO_COLOR="1", TERM="dumb")
+    return env
+
+
+TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]")
+
+
+def shorten_output(text):
+    """Keeps the start and (more of) the end of long output: errors and summaries are usually at the end."""
+    if len(text) <= MAX_OUTPUT:
+        return text
+    head, tail = MAX_OUTPUT // 5, MAX_OUTPUT - MAX_OUTPUT // 5
+    return text[:head] + f"\n… ({len(text) - head - tail} characters left out) …\n" + text[-tail:]
+
+
+def run_command(command, timeout=RUN_TIMEOUT):
+    command = str(command or "").strip()
+    if not command:
+        return "Error: the command is empty."
+    if len(command) > MAX_COMMAND:
+        return f"Refused: the command is longer than {MAX_COMMAND} characters."
+    try:
+        timeout = max(1, min(int(timeout or RUN_TIMEOUT), RUN_MAX_TIMEOUT))
+    except (TypeError, ValueError):
+        timeout = RUN_TIMEOUT
+    if not os.path.exists("/usr/bin/sandbox-exec"):
+        return "Error: commands cannot run here (the macOS sandbox is missing)."
+    ui_break()
+    shown = clean(command)
+    lines = [f"{BOLD}{piece}{RESET}" for piece in shown.splitlines() or [""]]
+    if DESTRUCTIVE.search(command):
+        lines.append(f"{RED}! can delete or overwrite files – /undo cannot bring them back{RESET}")
+    lines.append(f"{DIM}sandbox: no internet · writes only in this folder · stops after {timeout} s{RESET}")
+    print()
+    print(card(f"{ORANGE}runs a command{RESET}", lines))
+    if not confirm("Run?"):
+        print()
+        return "The user declined. The command was not run."
+    # the backup folder exists before the command runs, so no command can create it (e.g. as a link) in other case
+    os.makedirs(os.path.join(ROOT, BACKUP_DIR), exist_ok=True)
+    proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", sandbox_profile(), "/bin/zsh", "-f", "-c", command],
+                            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=True, env=command_env())
+    chunks, last = [], {"line": ""}
+
+    def reader():
+        for raw in iter(lambda: proc.stdout.readline(), b""):
+            text = raw.decode("utf-8", errors="replace")
+            chunks.append(text)
+            if text.strip():
+                last["line"] = text.strip()
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    started, timed_out = time.time(), False
+    try:
+        while t.is_alive():
+            t.join(0.2)
+            elapsed = time.time() - started
+            if elapsed > timeout:
+                timed_out = True
+                break
+            if LIVE:
+                tail = clean(TERMINAL_CODES.sub("", last["line"]))[: max(10, term_width() - 20)]
+                print(f"\r  {DIM}│ {int(elapsed)} s  {tail}{RESET}\033[K", end="", flush=True)
+    except KeyboardInterrupt:
+        if LIVE:
+            print("\r\033[K", end="")
+        raise
+    finally:
+        if timed_out or t.is_alive():
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)  # the command and everything it started
+            except (ProcessLookupError, PermissionError):
+                pass
+        t.join(2)
+        code = proc.wait()
+        proc.stdout.close()
+    if LIVE:
+        print("\r\033[K", end="", flush=True)
+    output = clean(TERMINAL_CODES.sub("", "".join(chunks))).rstrip()
+    stats["commands"] += 1
+    tail = output.expandtabs(4).splitlines()[-8:]
+    color = GREEN if code == 0 and not timed_out else RED
+    status = "stopped after the time limit" if timed_out else f"exit code {code}"
+    body = [f"{DIM}{line[: term_width() - 10]}{RESET}" for line in tail] or [f"{DIM}(no output){RESET}"]
+    print(card(f"{color}{'✓' if color == GREEN else '✗'}{RESET} {DIM}{status} · {fmt_num(time.time() - started)} s{RESET}",
+               body))
+    note = (" The sandbox blocked something (Operation not permitted): internet, writing outside the folder or "
+            "private data are not available to commands." if "Operation not permitted" in output else "")
+    return (f"Exit code: {code}" + (f" (stopped after {timeout} s)" if timed_out else "") + note + "\n"
+            + (shorten_output(output) or "(no output)"))
 
 
 # ---------- images and web ----------
@@ -951,7 +1248,8 @@ def web_search(query):
 
 FUNCS = {"list_dir": list_dir, "read_file": read_file, "search": search, "write_file": write_file,
          "edit_file": edit_file, "write_docx": write_docx, "write_pdf": write_pdf, "move_file": move_file,
-         "view_image": view_image, "web_search": web_search, "fetch_url": fetch_url}
+         "move_files": move_files, "run_command": run_command, "view_image": view_image, "web_search": web_search,
+         "fetch_url": fetch_url}
 
 
 # ---------- model ----------
@@ -960,10 +1258,16 @@ INTERNAL_REPLIES = ("Understood.", "All right, I have the conversation so far in
 state = {"thinking": False, "context": 32768, "used": 0, "last_answer": "", "tok_s": 0.0, "turn_start": 0.0,
          "phase": "thinking", "tools_shown": False}
 # for the receipt shown when the chat ends
-stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(), "moved": 0, "undone": 0}
+stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(), "moved": 0, "undone": 0,
+         "commands": 0}
 
 
 def loaded_context_length():
+    if BACKEND == "ollama":  # the launcher created the model copy with this context size
+        try:
+            return int(os.environ.get("FLASHCAT_CONTEXT") or 32768)
+        except ValueError:
+            return 32768
     try:
         with urllib.request.urlopen(f"{SERVER}/api/v0/models/{MODEL}", timeout=5) as r:
             return int(json.load(r).get("loaded_context_length") or 32768)
@@ -1217,7 +1521,14 @@ class MarkdownStream:
             return name
         return link(name, full) if os.path.isfile(full) else name
 
+    # the model sometimes writes symbols in LaTeX math, which the terminal cannot show
+    LATEX = {"rightarrow": "→", "to": "→", "leftarrow": "←", "Rightarrow": "⇒", "leftrightarrow": "↔", "times": "×",
+             "cdot": "·", "approx": "≈", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "neq": "≠", "pm": "±",
+             "div": "÷", "infty": "∞", "checkmark": "✓"}
+    LATEX_RE = re.compile(r"\$\s*\\(" + "|".join(sorted(LATEX, key=len, reverse=True)) + r")\s*\$")
+
     def _inline(self, text):
+        text = self.LATEX_RE.sub(lambda m: self.LATEX[m.group(1)], text)
         parts = re.split(r"(`[^`]+`)", text)
         out = []
         for part in parts:
@@ -1292,12 +1603,11 @@ def call_model(messages, tools=True, show=True):
                "stream_options": {"include_usage": True}}
     if tools:
         payload["tools"] = TOOLS
-    if not state["thinking"]:
+    if not state["thinking"] and not state.get("no_reasoning_effort"):
         payload["reasoning_effort"] = "none"
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["Authorization"] = f"Bearer {API_KEY}"
-    req = urllib.request.Request(URL, json.dumps(payload).encode(), headers)
     done = threading.Event()
     spinner = threading.Thread(target=spin, args=(done,), daemon=True)
     if sys.stdout.isatty():
@@ -1315,6 +1625,7 @@ def call_model(messages, tools=True, show=True):
     try:
         for attempt in range(2):  # LM Studio occasionally drops a connection; retry once
             try:
+                req = urllib.request.Request(URL, json.dumps(payload).encode(), headers)
                 with EscToCancel(), urllib.request.urlopen(req, timeout=900) as r:
                     for raw in r:
                         line = raw.decode("utf-8").strip()
@@ -1360,8 +1671,13 @@ def call_model(messages, tools=True, show=True):
                             c["function"]["arguments"] += fn.get("arguments") or ""
                 break
             except urllib.error.HTTPError as e:
+                if e.code == 400 and "reasoning_effort" in payload and not attempt:
+                    # some servers or versions do not know this setting: continue without it
+                    state["no_reasoning_effort"] = True
+                    del payload["reasoning_effort"]
+                    continue
                 if e.code in (401, 403):
-                    raise RuntimeError("LM Studio requires an API key. Turn off \"Require authentication\" in "
+                    raise RuntimeError("The model server requires an API key. In LM Studio, turn off \"Require authentication\" in "
                                        "LM Studio's server settings, or start with FLASHCAT_API_KEY=<key> flashcat") from None
                 raise
             except (http.client.RemoteDisconnected, ConnectionResetError):
@@ -1374,10 +1690,23 @@ def call_model(messages, tools=True, show=True):
             print()
     if t_first and generated:
         state["tok_s"] = generated / max(time.time() - t_first, 0.001)
+    if BACKEND == "ollama":
+        keep_loaded()
     msg = {"role": "assistant", "content": content}
     if calls:
         msg["tool_calls"] = [calls[i] for i in sorted(calls)]
     return msg
+
+
+def keep_loaded():
+    """Ollama unloads a model 5 minutes after the last request; Flashcat keeps it loaded until the chat ends (the
+    launcher's cleanup unloads it), so the next question does not wait for loading again."""
+    try:
+        req = urllib.request.Request(SERVER + "/api/generate", json.dumps({"model": MODEL, "keep_alive": -1}).encode(),
+                                     {"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).close()
+    except Exception:
+        pass
 
 
 STAR_FRAMES = "·✢✳✶✻✽✻✶✳✢"
@@ -1399,9 +1728,9 @@ def spin(done):
 
 TOOL_VERBS = {"list_dir": "looks into", "read_file": "reads", "search": "searches", "write_file": "writes",
               "edit_file": "changes", "write_docx": "creates Word document", "write_pdf": "creates PDF",
-              "move_file": "moves", "view_image": "looks at", "web_search": "searches the web for",
-              "fetch_url": "opens"}
-INTERACTIVE_TOOLS = {"write_file", "edit_file", "write_docx", "write_pdf", "move_file"}
+              "move_file": "moves", "move_files": "moves", "run_command": "runs", "view_image": "looks at",
+              "web_search": "searches the web for", "fetch_url": "opens"}
+INTERACTIVE_TOOLS = {"write_file", "edit_file", "write_docx", "write_pdf", "move_file", "move_files", "run_command"}
 tool_line = {"open": False, "text": ""}
 
 
@@ -1418,13 +1747,19 @@ def run_tool(call):
         args = json.loads(call["function"].get("arguments") or "{}")
     except json.JSONDecodeError:
         args = {}
+    if not isinstance(args, dict):
+        args = {}
     raw = clean(str(args.get("path") or args.get("source") or args.get("pattern") or args.get("query")
-                    or args.get("url") or "."))
+                    or args.get("url") or args.get("command") or "."))
+    if name == "move_files":
+        raw = plural(len(args.get("moves") or []), "item")
     verb = TOOL_VERBS.get(name, name)
     room = max(10, term_width() - len(verb) - 22)
     short = raw if len(raw) <= room else raw[: room - 1] + "…"
     if name in ("search", "web_search"):
         target = f"“{short}”"
+    elif name in ("run_command", "move_files"):
+        target = short
     elif name == "fetch_url":
         target = urllib.parse.urlparse(raw).netloc or short
     elif raw == ".":
@@ -1432,14 +1767,18 @@ def run_tool(call):
     else:
         target = link(short, os.path.join(ROOT, raw)) if os.path.exists(os.path.join(ROOT, raw)) else short
     text = f"  {DIM}◇{RESET} {verb} {target}"
-    if name not in ("search", "web_search", "fetch_url") and private_item(os.path.realpath(os.path.join(ROOT, raw))):
+    if name not in ("search", "web_search", "fetch_url", "run_command", "move_files") and private_item(os.path.realpath(os.path.join(ROOT, raw))):
         text = f"  {RED}◇ {verb} {short} · private{RESET}"
     print(text, end="", flush=True)
     tool_line.update(open=True, text=text)
     state["tools_shown"] = True
     started = time.time()
     try:
+        if name not in FUNCS:
+            raise ValueError(f"there is no tool called {name}.")
         result = str(FUNCS[name](**args))
+    except TypeError as e:
+        result = f"Error: wrong arguments for {name}: {e}"
     except FileNotFoundError:
         result = f"Error: {raw} does not exist."
     except IsADirectoryError:
@@ -1530,7 +1869,7 @@ def save_session(messages):
     os.makedirs(SESSION_DIR, exist_ok=True)
     with open(os.path.join(SESSION_DIR, state["session"] + ".json"), "w", encoding="utf-8") as f:
         json.dump({"root": ROOT, "saved": time.strftime("%Y-%m-%d %H:%M"),
-                   "messages": without_images(messages[1:])}, f, ensure_ascii=False)
+                   "messages": without_images(messages[1:]), "journal": journal}, f, ensure_ascii=False)
 
 
 def list_sessions():
@@ -1550,9 +1889,31 @@ def list_sessions():
     return result
 
 
+JOURNAL_KEYS = {"write": ("full", "rel", "backup"), "move": ("src", "dst", "src_rel", "dst_rel"), "batch": ("moves",)}
+
+
+def valid_journal_entry(e):
+    """True for an undo entry from a saved chat that is complete and only touches paths inside this folder."""
+    if not isinstance(e, dict) or e.get("type") not in JOURNAL_KEYS or not all(k in e for k in JOURNAL_KEYS[e["type"]]):
+        return False
+    entries = e["moves"] if e["type"] == "batch" else [e]
+    if not isinstance(entries, list) or not entries:
+        return False
+    paths = []
+    for m in entries:
+        if not isinstance(m, dict):
+            return False
+        keys = ("full", "backup") if e["type"] == "write" else JOURNAL_KEYS["move"]
+        if e["type"] != "write" and not all(k in m for k in keys):
+            return False
+        paths += [m.get(k) for k in ("full", "backup", "src", "dst") if m.get(k) is not None]
+    return all(isinstance(x, str) and inside(os.path.realpath(x), ROOT) for x in paths)
+
+
 def resume(messages, session_id, data):
     state.update(session=session_id, used=0, last_answer="")
     journal.clear()
+    journal.extend(e for e in data.get("journal") or [] if valid_journal_entry(e))
     msgs = data.get("messages") or []
     print(f"  {GREEN}✓{RESET} {DIM}chat from {data.get('saved')} loaded · {len(msgs)} messages{RESET}")
     last = next((m["content"] for m in reversed(msgs)
@@ -1590,8 +1951,8 @@ def show_context():
 
 
 def pretty_model():
-    known = {"gemma-4-26b-a4b-it-qat": "Gemma 4 · 26B"}
-    return known.get(MODEL, MODEL)
+    known = {"gemma-4-26b-a4b-it-qat": "Gemma 4 · 26B", "gemma4:26b": "Gemma 4 · 26B"}
+    return known.get(MODEL_NAME, MODEL_NAME) + (" · Ollama" if BACKEND == "ollama" else "")
 
 
 def start_card(loaded, sessions_count):
@@ -1682,6 +2043,8 @@ def receipt():
         parts.append(f"{stats['moved']} moved")
     if stats["undone"]:
         parts.append(f"{stats['undone']} undone")
+    if stats["commands"]:
+        lines.append(plural(stats["commands"], "command") + " run")
     if parts:
         lines.append("Files: " + " · ".join(parts))
         names = sorted(stats["created"] | stats["changed"])
@@ -1737,7 +2100,8 @@ def read_input():
     return "\n".join(lines).strip()
 
 
-COMMANDS = ["/help", "/undo", "/copy", "/save", "/resume", "/clear", "/compact", "/context", "/think", "/exit"]
+COMMANDS = ["/help", "/undo", "/copy", "/save", "/export", "/paste", "/remember", "/resume", "/clear", "/compact",
+            "/context", "/think", "/exit"]
 COMMAND_ALIASES = {"/?": "/help", "/quit": "/exit"}
 
 
@@ -1777,6 +2141,51 @@ def setup_completion():
         readline.parse_and_bind("tab: complete")
 
 
+PASTE_JXA = """
+function run(a) {
+  ObjC.import("AppKit");
+  var pb = $.NSPasteboard.generalPasteboard;
+  var url = pb.stringForType("public.file-url");
+  if (!url.isNil()) return "file:" + $.NSURL.URLWithString(url).path.js;
+  var types = ["public.png", "public.tiff", "public.jpeg", "public.heic"];
+  for (var i = 0; i < types.length; i++) {
+    var d = pb.dataForType(types[i]);
+    if (!d.isNil()) { d.writeToFileAtomically(a[0], true); return "image"; }
+  }
+  return "";
+}
+"""
+pasted_images = []  # (label, data URL) from /paste, sent with the next message
+
+
+def paste_image():
+    """Queues the image in the clipboard (a screenshot, or an image file copied in Finder) for the next message."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "clipboard")
+        kind = subprocess.run(["osascript", "-l", "JavaScript", "-e", PASTE_JXA, target],
+                              capture_output=True, text=True, timeout=30).stdout.strip()
+        if kind.startswith("file:"):
+            path = kind[5:]
+            try:
+                full = resolve(os.path.relpath(path, ROOT), ask=True)
+            except ValueError:
+                print(f"The copied file is outside this folder – only files in {ROOT} can be attached.\n")
+                return
+            if os.path.splitext(full)[1].lower() not in IMAGE_EXT:
+                print(f"The copied file is no image – attach it with @{clean(os.path.relpath(full, ROOT))}\n")
+                return
+            label, url = clean(os.path.relpath(full, ROOT)), image_data_url(full)
+        elif kind == "image":
+            label, url = "clipboard", image_data_url(target)
+        else:
+            print("There is no image in the clipboard. Take a screenshot with ⌘⇧4 while holding Ctrl, "
+                  "then /paste.\n")
+            return
+    pasted_images.append((label, url))
+    print(f"  {DIM}◇{RESET} image from the {'clipboard' if label == 'clipboard' else label} attached "
+          f"{DIM}– now type your question{RESET}\n")
+
+
 MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')
 
 
@@ -1807,6 +2216,8 @@ def attach_mentions(text):
                     print(f"  {RED}✗{RESET} {rel} {DIM}could not be read: {e}{RESET}")
                 break
     content = text + "".join(blocks)
+    images += pasted_images
+    pasted_images.clear()
     if not images:
         return content
     parts = [{"type": "text", "text": content}]
@@ -1817,9 +2228,12 @@ def attach_mentions(text):
 
 HELP_COMMANDS = [
     ("/help", "this overview", ""),
-    ("/undo", "undo the last file change", ""),
+    ("/undo", "undo the last file change", "/undo list shows all"),
     ("/copy", "copy the last answer", ""),
     ("/save", "save the last answer as a file", "/save name.md"),
+    ("/export", "save the whole chat as Markdown", "/export name.md"),
+    ("/paste", "attach the image in the clipboard", "e.g. a screenshot"),
+    ("/remember", "note something for all chats", "/remember I use metric units"),
     ("/resume", "earlier chats in this folder", "/resume 2 loads no. 2"),
     ("/clear", "new chat", ""),
     ("/compact", "summarize the chat", "frees context"),
@@ -1832,6 +2246,7 @@ HELP_TIPS = [
     ("@file", "attach a file", "Tab completes · @\"with spaces.pdf\""),
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
+    ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
     ("--model", "another model", "flashcat --models lists them"),
     ("--update", "newest version", "flashcat --update"),
 ]
@@ -1857,6 +2272,74 @@ def show_help():
     print()
     print("\n".join(lines))
     print()
+
+
+def chat_markdown(messages):
+    """The chat as a Markdown document: questions, answers and the tools used (not their raw results)."""
+    out = [f"# Flashcat chat · {time.strftime('%Y-%m-%d %H:%M')}", "",
+           f"Folder: `{ROOT.replace(HOME, '~', 1)}` · model: {MODEL_NAME}", ""]
+    for m in messages[1:]:
+        content = m.get("content")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content if p.get("type") == "text")
+        content = (content or "").strip()
+        if m.get("role") == "user":
+            if content.startswith(("(Info:", "(Please answer", "(Image from view_image")) or \
+                    content.startswith("Summary of our conversation"):
+                continue
+            content = re.sub(r"\n\n--- File: (.+?) ---\n.*?\n--- End of \1 ---", r"\n\n📎 \1", content, flags=re.S)
+            content = re.sub(r"\n\n--- Input \(piped\) ---\n.*?\n--- End of input ---", "\n\n📎 piped input",
+                             content, flags=re.S)
+            out += ["## You", "", content, ""]
+        elif m.get("role") == "assistant":
+            used = [f"*{c['function']['name']}*" for c in m.get("tool_calls") or []]
+            if used:
+                out += [f"> used {', '.join(used)}", ""]
+            if content and content not in INTERNAL_REPLIES:
+                out += ["## Flashcat", "", content, ""]
+    return "\n".join(out).rstrip() + "\n"
+
+
+def save_text(name, text, default):
+    """Writes `text` as a new file in the folder (never replaces one: name-2.md, name-3.md, …)."""
+    name = name or default
+    if not os.path.splitext(name)[1]:
+        name += ".md"
+    try:
+        full, rel = check_target(name, WRITE_EXT)
+    except ValueError as e:
+        print(f"{e}\n")
+        return
+    base, ext = os.path.splitext(full)
+    n = 2
+    while os.path.exists(full):
+        full, n = f"{base}-{n}{ext}", n + 1
+    save_with_backup(full, os.path.relpath(full, ROOT), text)
+    print()
+
+
+def remember(note):
+    """/remember: adds a line to the global ~/.flashcat/FLASHCAT.md, which every chat loads."""
+    path = os.path.join(HOME_DIR, "FLASHCAT.md")
+    if not note:
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read().strip()
+        except OSError:
+            text = ""
+        print(card(f"{ORANGE}✻{RESET} ~/.flashcat/FLASHCAT.md", [clean(l) for l in text.splitlines()] or
+                   [f"{DIM}(nothing yet – /remember <note> adds a line){RESET}"]))
+        print(f"{DIM}  used in every chat · edit the file to change or remove notes{RESET}\n")
+        return None
+    note = clean(" ".join(note.split()))
+    existing = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            existing = f.read()
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(("" if not existing or existing.endswith("\n") else "\n") + f"- {note}\n")
+    print(f"  {GREEN}✓{RESET} {DIM}noted for all chats in ~/.flashcat/FLASHCAT.md{RESET}\n")
+    return note
 
 
 def last_answer(messages):
@@ -1892,6 +2375,8 @@ def handle_command(user, messages):
     elif cmd == "/compact":
         messages = compact(messages)
         save_session(messages)
+    elif cmd == "/undo" and arg.lower() in ("list", "ls"):
+        show_journal()
     elif cmd == "/undo":
         desc = undo()
         if desc:
@@ -1910,19 +2395,18 @@ def handle_command(user, messages):
         if not text:
             print("There is no answer to save yet.\n")
             return messages
-        name = arg or f"answer-{time.strftime('%Y%m%d-%H%M')}.md"
-        if not os.path.splitext(name)[1]:
-            name += ".md"
-        try:
-            full, rel = check_target(name, WRITE_EXT)
-        except ValueError as e:
-            print(f"{e}\n")
+        save_text(arg, text + "\n", f"answer-{time.strftime('%Y%m%d-%H%M')}.md")
+    elif cmd == "/export":
+        if len(messages) < 2:
+            print("There is nothing to export yet.\n")
             return messages
-        base, ext = os.path.splitext(full)
-        n = 2
-        while os.path.exists(full):
-            full, n = f"{base}-{n}{ext}", n + 1
-        save_with_backup(full, os.path.relpath(full, ROOT), text + "\n")
+        save_text(arg, chat_markdown(messages), f"chat-{time.strftime('%Y%m%d-%H%M')}.md")
+    elif cmd == "/paste":
+        paste_image()
+    elif cmd == "/remember":
+        note = remember(arg)
+        if note:
+            messages[0] = {**messages[0], "content": messages[0]["content"] + f"\n\nThe user asked you to remember: {note}"}
     elif cmd == "/resume":
         sessions = list_sessions()
         if arg.isdigit() and 1 <= int(arg) <= len(sessions):
@@ -1955,23 +2439,35 @@ def confirm_broad_folder():
         f"{DIM}Keys, passwords, shell history and ~/Library stay blocked unless you allow them.{RESET}",
         f"{DIM}Better: first change into a project folder, e.g. cd ~/Documents/my-project{RESET}"]))
     try:
-        return input(f"  {ORANGE}?{RESET} Start here anyway? {DIM}[Y/N]{RESET} ").strip().lower() in ("y", "yes")
+        return ask(f"  {ORANGE}?{RESET} Start here anyway? {DIM}[Y/N]{RESET} ").strip().lower() in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         print()
         return False
 
 
 def main():
+    global TTY_ANSWERS
+    answer_out = sys.stdout
+    if QUESTION:
+        TTY_ANSWERS = not sys.stdin.isatty()  # stdin carries data: questions are answered in the terminal
+        if not answer_out.isatty():
+            sys.stdout = sys.stderr  # only the answer goes to the file or program
     os.makedirs(HOME_DIR, exist_ok=True)
     os.chmod(HOME_DIR, 0o700)  # saved chats contain file contents; other accounts on this Mac must not read them
     if not os.environ.get("FLASHCAT_FOLDER_CONFIRMED") and not confirm_broad_folder():
         return
-    setup_completion()
     system, loaded = system_prompt()
     messages = [{"role": "system", "content": system}]
     state["context"] = loaded_context_length()
     state["session"] = new_session_id()
     sessions = list_sessions()
+    if QUESTION:
+        if RESUME and sessions:
+            state["session"] = sessions[0][0]
+            messages = messages[:1] + (sessions[0][1].get("messages") or [])
+            journal.extend(e for e in sessions[0][1].get("journal") or [] if valid_journal_entry(e))
+        return one_shot(messages, answer_out)
+    setup_completion()
     start_card(loaded, 0 if RESUME else len(sessions))
     if RESUME:
         state["cat_rows_up"] = None  # more lines follow the card, the cat's position is not known exactly
@@ -2012,31 +2508,8 @@ def chat_loop(messages):
             continue
 
         turn_start = len(messages)
-        state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False)
-        stats["questions"] += 1
-        print()
-        messages.append({"role": "user", "content": attach_mentions(user)})
         try:
-            nudged = False
-            for step in range(15):
-                state["phase"] = "thinking" if step == 0 else "working"
-                msg = call_model(messages)
-                if "tool_calls" not in msg and not msg["content"].strip() and not nudged:
-                    nudged = True  # empty reply: ask once more instead of showing nothing
-                    messages.append({"role": "user", "content": "(Please answer my last question now.)"})
-                    continue
-                messages.append(msg)
-                if msg["content"].strip():
-                    state["last_answer"] = msg["content"].strip()
-                if "tool_calls" not in msg:
-                    break
-                for c in msg["tool_calls"]:
-                    messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(c)})
-                while pending_images:
-                    rel, url = pending_images.pop(0)
-                    messages.append({"role": "user", "content": [
-                        {"type": "text", "text": f"(Image from view_image: {rel})"},
-                        {"type": "image_url", "image_url": {"url": url}}]})
+            run_turn(messages, user)
             save_session(messages)
             show_context()
         except KeyboardInterrupt:
@@ -2051,7 +2524,71 @@ def chat_loop(messages):
             print(f"\n  {RED}✗ Error:{RESET} {e}\n")
 
 
+def run_turn(messages, user, show=True):
+    """One question: sends it, runs the tools the model calls and appends everything to `messages`."""
+    state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False)
+    stats["questions"] += 1
+    if show:
+        print()
+    messages.append({"role": "user", "content": attach_mentions(user)})
+    nudged = False
+    for step in range(15):
+        state["phase"] = "thinking" if step == 0 else "working"
+        msg = call_model(messages, show=show)
+        if "tool_calls" not in msg and not msg["content"].strip() and not nudged:
+            nudged = True  # empty reply: ask once more instead of showing nothing
+            messages.append({"role": "user", "content": "(Please answer my last question now.)"})
+            continue
+        messages.append(msg)
+        if msg["content"].strip():
+            state["last_answer"] = msg["content"].strip()
+        if "tool_calls" not in msg:
+            break
+        for c in msg["tool_calls"]:
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(c)})
+        while pending_images:
+            rel, url = pending_images.pop(0)
+            messages.append({"role": "user", "content": [
+                {"type": "text", "text": f"(Image from view_image: {rel})"},
+                {"type": "image_url", "image_url": {"url": url}}]})
+
+
+MAX_PIPED = 200_000
+
+
+def one_shot(messages, answer_out):
+    """flashcat "question": answers once and exits. Piped input is attached to the question. When the output goes
+    to a file or another program, only the answer is written there (as Markdown); everything else goes to stderr."""
+    text = QUESTION
+    if not sys.stdin.isatty():
+        data = sys.stdin.read(MAX_PIPED + 1)
+        if len(data) > MAX_PIPED:
+            data = data[:MAX_PIPED] + f"\n… (shortened, only the first {MAX_PIPED} characters)"
+        if data.strip():
+            text += f"\n\n--- Input (piped) ---\n{clean(data)}\n--- End of input ---"
+    to_terminal = answer_out.isatty()
+    try:
+        run_turn(messages, text, show=to_terminal)
+    except KeyboardInterrupt:
+        print(f"\n  {YELLOW}✗{RESET} {DIM}cancelled{RESET}", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"  {RED}✗ Error:{RESET} {e}", file=sys.stderr)
+        return 1
+    save_session(messages)
+    if not to_terminal:
+        answer_out.write(state["last_answer"] + "\n")
+        answer_out.flush()
+    else:
+        print()
+    return 0
+
+
 if __name__ == "__main__":
+    if MODEL == "--version":
+        print(f"Flashcat {VERSION}")
+        sys.exit(0)
     if MODEL == "--confirm-folder":
+        TTY_ANSWERS = True  # the launcher may get a question with piped input: answer in the terminal
         sys.exit(0 if confirm_broad_folder() else 1)
-    main()
+    sys.exit(main() or 0)
