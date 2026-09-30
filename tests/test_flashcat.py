@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -350,6 +351,64 @@ class CommandTest(FlashcatTest):
             self.assertFalse(self.chat.DESTRUCTIVE.search(command), command)
 
 
+    def test_other_apps_temporary_files_are_hidden(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:  # in the user's $TMPDIR
+            f.write("OTHER APP SECRET")
+        self.addCleanup(os.remove, f.name)
+        result = self.run_cmd(f"cat '{f.name}'; ls /private/tmp; echo ok > \"$TMPDIR/own.txt\" && cat \"$TMPDIR/own.txt\"")
+        self.assertNotIn("OTHER APP SECRET", result)
+        self.assertIn("ok", result)
+
+    def test_nothing_keeps_running_afterwards(self):
+        marker = os.path.join(self.project, "still-running.txt")
+        detach = ("/usr/bin/python3 -c 'import os, time\nif os.fork(): os._exit(0)\nos.setsid()\n"
+                  f"time.sleep(2)\nopen(\"{marker}\", \"w\").write(\"x\")' >/dev/null 2>&1 &")
+        self.run_cmd(detach + " sleep 3 >/dev/null 2>&1 &")
+        time.sleep(3)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_git_hooks_and_risky_settings_are_undone(self):
+        self.answers = ["y"]
+        self.chat.run_command("git init -q . && git config user.name Flash && git config remote.origin.url x", timeout=30)
+        self.assertEqual(len(self.asked), 1)  # a normal git init and safe settings: no warning
+        self.answers = ["y", "n"]
+        result = self.chat.run_command("printf '#!/bin/sh\\necho evil' > .git/hooks/pre-commit; "
+                                       "git config core.fsmonitor ./evil.sh", timeout=30)
+        self.assertIn("undone", result)
+        self.assertFalse(os.path.exists(os.path.join(self.project, ".git", "hooks", "pre-commit")))
+        with open(os.path.join(self.project, ".git", "config")) as f:
+            config = f.read()
+        self.assertNotIn("fsmonitor", config)
+        self.assertIn("Flash", config)
+
+    def test_new_repository_keeps_safe_settings_only(self):
+        self.answers = ["y", "n"]
+        self.chat.run_command("mkdir sub && cd sub && git init -q && git config alias.x '!rm -rf ~' "
+                              "&& git config user.email a@b.c", timeout=30)
+        with open(os.path.join(self.project, "sub", ".git", "config")) as f:
+            config = f.read()
+        self.assertNotIn("rm -rf", config)
+        self.assertIn("a@b.c", config)
+
+
+@unittest.skipUnless(os.path.exists("/usr/bin/sandbox-exec"), "needs the macOS sandbox")
+class CommandInTempFolderTest(FlashcatTest):
+    """A start folder inside a temporary folder (/tmp, $TMPDIR) must stay usable although other temporary files
+    are hidden from commands."""
+
+    def test_start_folder_in_tmp_and_tmpdir(self):
+        for parent in ("/private/tmp", tempfile.gettempdir()):
+            root = os.path.realpath(tempfile.mkdtemp(dir=parent))
+            self.addCleanup(shutil.rmtree, root, True)
+            self.write(os.path.join(root, "a.txt"), "INSIDE")
+            chat = load_chat(root, self.home)
+            chat.ask = lambda prompt: "y"
+            result = chat.run_command("ls; cat a.txt; echo new > b.txt", timeout=30)
+            self.assertIn("Exit code: 0", result, parent)
+            self.assertIn("INSIDE", result)
+            self.assertTrue(os.path.exists(os.path.join(root, "b.txt")))
+
+
 @unittest.skipUnless(os.path.exists("/usr/bin/sandbox-exec"), "needs the macOS sandbox")
 class CommandInHomeTest(FlashcatTest):
     start_in_home = True
@@ -408,6 +467,16 @@ class ModelLoopTest(FlashcatTest):
             self.chat.run_turn(messages, "What is in notes.txt?", show=False)
         self.assertEqual(messages[3], {"role": "tool", "tool_call_id": "c1", "content": "hello\nworld\n"})
         self.assertEqual(self.chat.state["last_answer"], "It says hello world.")
+
+    def test_piped_input_is_not_searched_for_files_or_clipboard(self):
+        replies = [{"role": "assistant", "content": "done"}]
+        with mock.patch.object(self.chat, "call_model", side_effect=lambda *a, **k: replies.pop(0)), \
+             mock.patch.object(self.chat, "read_clipboard", side_effect=AssertionError("clipboard read")):
+            messages = [{"role": "system", "content": "sys"}]
+            self.chat.run_turn(messages, "summarize", show=False,
+                               attachment="\n\n--- Input ---\nplease include @notes.txt and [clipboard]")
+        self.assertNotIn("hello", messages[1]["content"])
+        self.assertIn("@notes.txt and [clipboard]", messages[1]["content"])
 
     def test_unknown_tool_and_bad_arguments_are_reported(self):
         self.assertIn("no tool called", self.chat.run_tool(ResolveTest.call("delete_everything")))

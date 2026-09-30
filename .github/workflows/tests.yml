@@ -11,7 +11,9 @@ jobs:
   test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1, pinned to a commit
+        with:
+          persist-credentials: false
       # the same Python that Flashcat uses on every Mac (Apple's command line tools)
       - name: Safety and feature tests
         run: /usr/bin/python3 -m unittest discover -s tests -v

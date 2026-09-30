@@ -182,8 +182,11 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   (`rm`, `mv`, `>`, `git reset`, …) are marked in red – `/undo` cannot bring back what a command changed.
 - The macOS sandbox enforces the rules, whatever the command does: **no internet** (not even name
   lookups), **writing only inside the start folder** (never its backups), no reading of your other files,
-  private data and key files, no opening apps or web pages, no clipboard, no keychain. Commands are
-  stopped after 2 minutes (at most 10) and cannot ask for input.
+  other apps' temporary files, private data and key files, no opening apps or web pages, no clipboard,
+  no keychain. Commands are stopped after 2 minutes (at most 10), cannot ask for input, and nothing they
+  started keeps running afterwards.
+- If a command adds git hooks or git settings that would run programs the next time you use git
+  (outside the sandbox), Flashcat shows them in red and undoes them unless you keep them.
 
 **Every change asks first**
 - You see a preview of every new file and every change before you answer `Y`. Long previews are

@@ -47,7 +47,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -968,13 +968,12 @@ def any_case(text):
     return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else sb_regex(c) for c in text)
 
 
-def sandbox_profile():
-    """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and temporary
-    folders, no reading of user files outside the start folder (home folders, other users, external drives - system
-    files and developer tools stay readable), private data and key files blocked like for the other tools, no
-    opening apps or URLs, no clipboard, no keychain."""
+def sandbox_profile(own_tmp):
+    """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and the
+    command's own temporary folder `own_tmp`, no reading of user files outside the start folder (home folders, other
+    users, external drives, other apps' temporary files - system files and developer tools stay readable), private
+    data and key files blocked like for the other tools, no opening apps or URLs, no clipboard, no keychain."""
     home, root = HOME, ROOT
-    tmp = sorted({os.path.realpath(tempfile.gettempdir()), "/private/tmp", "/private/var/tmp"})
     private = f'(regex #"^{sb_regex(home)}/\\.") (subpath {sb_string(os.path.join(home, "Library"))})'
     top = os.path.relpath(root, home).split(os.sep)[0] if inside(root.lower(), home.lower()) else ""
     root_private = top.startswith(".") and top != "." or top.lower() == "library"  # started inside e.g. ~/.config
@@ -990,17 +989,22 @@ def sandbox_profile():
         '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") '
         '(global-name "com.apple.coreservices.quarantine-resolver") (global-name "com.apple.pasteboard.1") '
         '(global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc") '
-        '(global-name "com.apple.secd"))',
-        # reading: no user files except the start folder and developer tools
-        f"(deny file-read-data (subpath {sb_string(home)}) (subpath \"/Users\") (subpath \"/Volumes\"))",
+        '(global-name "com.apple.secd") (global-name-regex #"^com\\.apple\\.nsurlsessiond"))',
+        # reading: no user files except the start folder and developer tools; no temporary folders of other apps
+        # (they can hold private data: images, documents, caches). Later rules win, so the order matters.
+        f"(deny file-read-data (subpath {sb_string(home)}) (subpath \"/Users\") (subpath \"/Volumes\") "
+        '(subpath "/private/var/folders") (subpath "/private/tmp") (subpath "/private/var/tmp"))',
         f"(allow file-read-data (subpath {sb_string(root)}))",
         f"(deny file-read-data {private})",
         "(allow file-read-data " + " ".join(f"(subpath {sb_string(os.path.join(home, t))})" for t in TOOLCHAINS) + ")",
-        # writing: only the start folder and temporary folders, never private data or the backups
+        # writing: only the start folder and the command's own temporary folder, never private data or the backups
         "(deny file-write*)",
         f"(allow file-write* (subpath {sb_string(root)}) "
-        + " ".join(f"(subpath {sb_string(t)})" for t in tmp)
         + ' (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+        f"(allow file-read-data file-write* (subpath {sb_string(own_tmp)}) "
+        # caches of Apple's developer tools (xcrun, compilers) - tool paths and compiled modules, nothing private
+        '(regex #"^/private/var/folders/[^/]+/[^/]+/T/xcrun_db(-|$)") '
+        '(regex #"^/private/var/folders/[^/]+/[^/]+/C/(com\\.apple\\.dt\\.|clang|org\\.llvm|org\\.swift|com\\.apple\\.DeveloperTools)"))',
         f"(deny file-write* {private})",
     ]
     if root_private:  # started there on purpose: the start folder itself stays usable
@@ -1012,11 +1016,168 @@ def sandbox_profile():
     return "\n".join(rules)
 
 
-def command_env():
+def command_env(own_tmp, run_id):
     env = dict(os.environ)
     env.pop("FLASHCAT_API_KEY", None)
-    env.update(PAGER="cat", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0", NO_COLOR="1", TERM="dumb")
+    env.update(PAGER="cat", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0", NO_COLOR="1", TERM="dumb",
+               TMPDIR=own_tmp + "/", FLASHCAT_RUN=run_id, HOME=HOME)
     return env
+
+
+def stop_leftovers(proc, run_id):
+    """Stops what a command left running: its process group, and processes that detached from it (found by the
+    FLASHCAT_RUN mark in their environment) - they could otherwise go on changing the folder unseen."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        ps = subprocess.run(["ps", "-Aww", "-E", "-o", "pid=,command="], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in ps.stdout.splitlines():
+        pid, _, rest = line.strip().partition(" ")
+        if f"FLASHCAT_RUN={run_id}" in rest and pid.isdigit() and int(pid) != os.getpid():
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
+# ---------- git settings that run programs (checked after every command) ----------
+
+# git settings that cannot start a program; everything else (core.fsmonitor, core.pager, alias.x = !…, filter.*,
+# include.path, core.hooksPath, …) could run code outside the sandbox the next time the user runs git
+SAFE_GIT_KEYS = re.compile(r"(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|"
+                           r"precomposeunicode|symlinks|autocrlf|eol)|user\.(name|email)|init\.defaultbranch|"
+                           r"remote\.[^.]+\.(url|fetch|pushurl)|branch\.[^.]+\.(remote|merge|rebase)|"
+                           r"extensions\.[a-z]+|pull\.rebase|push\.default|lfs\.repositoryformatversion)", re.IGNORECASE)
+MAX_GIT_DEPTH = 3
+
+
+def git_dirs():
+    """The .git folders of the repositories in the start folder (the start folder's own, and subfolders up to
+    MAX_GIT_DEPTH levels deep)."""
+    found = []
+    for dirpath, dirnames, _ in os.walk(ROOT):
+        depth = dirpath[len(ROOT):].count(os.sep)
+        for d in dirnames:
+            if d.lower() == ".git" and os.path.isdir(os.path.join(dirpath, d)):
+                found.append(os.path.join(dirpath, d))
+        dirnames[:] = [] if depth >= MAX_GIT_DEPTH else \
+            [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d))]
+    return found
+
+
+def git_settings():
+    """{path: content} of every git config file and hook (not the *.sample examples) in the start folder."""
+    files = {}
+    for g in git_dirs():
+        for dirpath, dirnames, filenames in os.walk(g):
+            rel = os.path.relpath(dirpath, g)
+            if rel != "." and rel.split(os.sep)[0].lower() in ("objects", "refs", "logs", "lfs"):
+                dirnames[:] = []
+                continue
+            in_hooks = "hooks" in rel.lower().split(os.sep)
+            for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+                p = os.path.join(dirpath, name)
+                if in_hooks and not name.endswith(".sample") or name.lower().startswith("config"):
+                    try:
+                        files[p] = ("link:" + os.readlink(p)) if os.path.islink(p) else \
+                            open(p, "rb").read(200_000).decode("utf-8", errors="replace")
+                    except OSError:
+                        pass
+        if os.path.islink(os.path.join(g, "hooks")):
+            files[os.path.join(g, "hooks")] = "link:" + os.readlink(os.path.join(g, "hooks"))
+    return files
+
+
+def git_config_entries(text):
+    """Set of (key, value) pairs of a git config file, e.g. ("core.fsmonitor", "evil.sh")."""
+    entries, section = set(), ""
+    for line in text.splitlines():
+        line = line.strip()
+        head = re.match(r'\[\s*([^\s\]"]+)(?:\s+"(.*)")?\s*\]', line)
+        if head:
+            section = head.group(1).lower() + (f".{head.group(2)}" if head.group(2) is not None else "")
+            continue
+        kv = re.match(r"([A-Za-z][\w-]*)\s*(?:=\s*(.*))?$", line)
+        if kv and section:
+            entries.add((f"{section}.{kv.group(1).lower()}", (kv.group(2) or "").strip()))
+    return entries
+
+
+def risky_git_changes(before, after):
+    """[(path, what)] for new or changed hooks and new git settings that can run programs."""
+    risky = []
+    for p, content in after.items():
+        old = before.get(p)
+        if content == old:
+            continue
+        if os.path.basename(p).lower().startswith("config") and not content.startswith("link:"):
+            new = git_config_entries(content) - git_config_entries(old or "")
+            for key, value in sorted(new):
+                if not SAFE_GIT_KEYS.fullmatch(key):
+                    risky.append((p, f"{key} = {value}"))
+        else:
+            risky.append((p, "new hook" if old is None else "changed hook"))
+    return risky
+
+
+def restore_git_setting(p, old, risky_lines):
+    """Puts a git config file or hook back as it was before the command."""
+    if os.path.islink(p) or not os.path.basename(p).lower().startswith("config"):
+        if os.path.islink(p) or os.path.isfile(p):
+            os.remove(p)
+        if old is not None and not old.startswith("link:"):
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(old)
+        return
+    if old is not None:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(old)
+        return
+    # a new repository's config: keep it, only without the risky settings
+    bad = {line.split(" = ", 1)[0] for line in risky_lines}
+    out, section = [], ""
+    with open(p, encoding="utf-8", errors="replace") as f:
+        for line in f.read().splitlines():
+            head = re.match(r'\s*\[\s*([^\s\]"]+)(?:\s+"(.*)")?\s*\]', line)
+            key = re.match(r"\s*([A-Za-z][\w-]*)\s*(=|$)", line)
+            if head:
+                section = head.group(1).lower() + (f".{head.group(2)}" if head.group(2) is not None else "")
+            elif key and f"{section}.{key.group(1).lower()}" in bad:
+                continue
+            out.append(line)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def check_git_settings(before):
+    """After a command: new hooks or git settings that run programs are shown in red and undone unless the user
+    keeps them. Returns a note for the model."""
+    after = git_settings()
+    risky = risky_git_changes(before, after)
+    if not risky:
+        return ""
+    lines = [f"{RED}{clean(os.path.relpath(p, ROOT))}: {clean(what)[:120]}{RESET}" for p, what in risky[:12]]
+    if len(risky) > 12:
+        lines.append(f"{RED}… and {len(risky) - 12} more{RESET}")
+    lines += [f"{RED}git runs these programs itself, outside the sandbox, the next time you use git.{RESET}",
+              f"{RED}Only keep them if you asked for exactly this.{RESET}"]
+    ui_break()
+    print(card(f"{RED}! The command changed git settings that run programs{RESET}", lines, color=RED))
+    try:
+        keep = ask(f"  {RED}? Keep them? [Y/N]{RESET} ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        keep = False
+    if keep:
+        return " The user kept the changed git settings."
+    for p in {p for p, _ in risky}:
+        restore_git_setting(p, before.get(p), [w for q, w in risky if q == p])
+    print(f"  {GREEN}✓{RESET} {DIM}git settings restored{RESET}")
+    return (" The command changed git settings that can run programs (hooks or config); the user did not keep "
+            "them and they were undone. Do not try again.")
 
 
 TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]")
@@ -1055,9 +1216,19 @@ def run_command(command, timeout=RUN_TIMEOUT):
         return "The user declined. The command was not run."
     # the backup folder exists before the command runs, so no command can create it (e.g. as a link) in other case
     os.makedirs(os.path.join(ROOT, BACKUP_DIR), exist_ok=True)
-    proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", sandbox_profile(), "/bin/zsh", "-f", "-c", command],
+    own_tmp = os.path.realpath(tempfile.mkdtemp(prefix="flashcat-run-"))
+    run_id = os.urandom(8).hex()
+    git_before = git_settings()
+    try:
+        return _run_sandboxed(command, timeout, own_tmp, run_id, git_before)
+    finally:
+        shutil.rmtree(own_tmp, ignore_errors=True)
+
+
+def _run_sandboxed(command, timeout, own_tmp, run_id, git_before):
+    proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", sandbox_profile(own_tmp), "/bin/zsh", "-f", "-c", command],
                             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            start_new_session=True, env=command_env())
+                            start_new_session=True, env=command_env(own_tmp, run_id))
     chunks, last = [], {"line": ""}
 
     def reader():
@@ -1085,11 +1256,7 @@ def run_command(command, timeout=RUN_TIMEOUT):
             print("\r\033[K", end="")
         raise
     finally:
-        if timed_out or t.is_alive():
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)  # the command and everything it started
-            except (ProcessLookupError, PermissionError):
-                pass
+        stop_leftovers(proc, run_id)  # also after a normal end: nothing keeps running in the background
         t.join(2)
         code = proc.wait()
         proc.stdout.close()
@@ -1105,6 +1272,7 @@ def run_command(command, timeout=RUN_TIMEOUT):
                body))
     note = (" The sandbox blocked something (Operation not permitted): internet, writing outside the folder or "
             "private data are not available to commands." if "Operation not permitted" in output else "")
+    note += check_git_settings(git_before)
     return (f"Exit code: {code}" + (f" (stopped after {timeout} s)" if timed_out else "") + note + "\n"
             + (shorten_output(output) or "(no output)"))
 
@@ -1990,6 +2158,18 @@ def start_card(loaded, sessions_count):
     state["cat_rows_up"] = 1 + box.count("\n") + 1 + 1 + 1
 
 
+def set_title(on):
+    """Window title "🐈 Flashcat · folder" while the chat runs; the terminal's own title comes back afterwards
+    (saved and restored with the xterm title stack)."""
+    if not LIVE:
+        return
+    if on:
+        name = clean(os.path.basename(ROOT) or ROOT).replace("\007", "")
+        print(f"\033[22;0t\033]0;🐈 Flashcat · {name}\007", end="", flush=True)
+    else:
+        print("\033[23;0t", end="", flush=True)
+
+
 def cat_asleep():
     hour = time.localtime().tm_hour
     return hour >= 23 or hour < 6
@@ -2512,6 +2692,7 @@ def main():
             journal.extend(e for e in sessions[0][1].get("journal") or [] if valid_journal_entry(e))
         return one_shot(messages, answer_out)
     setup_completion()
+    set_title(True)
     start_card(loaded, 0 if RESUME else len(sessions))
     if RESUME:
         state["cat_rows_up"] = None  # more lines follow the card, the cat's position is not known exactly
@@ -2524,6 +2705,7 @@ def main():
         chat_loop(messages)
     finally:
         receipt()
+        set_title(False)
 
 
 def chat_loop(messages):
@@ -2568,13 +2750,20 @@ def chat_loop(messages):
             print(f"\n  {RED}✗ Error:{RESET} {e}\n")
 
 
-def run_turn(messages, user, show=True):
-    """One question: sends it, runs the tools the model calls and appends everything to `messages`."""
+def run_turn(messages, user, show=True, attachment=""):
+    """One question: sends it, runs the tools the model calls and appends everything to `messages`. `attachment`
+    (piped input) is added as it is: @file and [clipboard] in it are not resolved - only the user's own words are."""
     state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False)
     stats["questions"] += 1
     if show:
         print()
-    messages.append({"role": "user", "content": attach_mentions(user)})
+    content = attach_mentions(user)
+    if attachment:
+        if isinstance(content, list):
+            content[0]["text"] += attachment
+        else:
+            content += attachment
+    messages.append({"role": "user", "content": content})
     nudged = False
     for step in range(15):
         state["phase"] = "thinking" if step == 0 else "working"
@@ -2603,16 +2792,16 @@ MAX_PIPED = 200_000
 def one_shot(messages, answer_out):
     """flashcat "question": answers once and exits. Piped input is attached to the question. When the output goes
     to a file or another program, only the answer is written there (as Markdown); everything else goes to stderr."""
-    text = QUESTION
+    text, piped = QUESTION, ""
     if not sys.stdin.isatty():
         data = sys.stdin.read(MAX_PIPED + 1)
         if len(data) > MAX_PIPED:
             data = data[:MAX_PIPED] + f"\n… (shortened, only the first {MAX_PIPED} characters)"
         if data.strip():
-            text += f"\n\n--- Input (piped) ---\n{clean(data)}\n--- End of input ---"
+            piped = f"\n\n--- Input (piped) ---\n{clean(data)}\n--- End of input ---"
     to_terminal = answer_out.isatty()
     try:
-        run_turn(messages, text, show=to_terminal)
+        run_turn(messages, text, show=to_terminal, attachment=piped)
     except KeyboardInterrupt:
         print(f"\n  {YELLOW}✗{RESET} {DIM}cancelled{RESET}", file=sys.stderr)
         return 130

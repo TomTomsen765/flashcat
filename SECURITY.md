@@ -32,14 +32,23 @@ own code, whatever the model asks for.
 - It runs in a macOS sandbox (`sandbox-exec`) that Flashcat builds for the start folder. The sandbox
   enforces, for the command and everything it starts:
   - no network at all – no connections, not even name lookups (which could carry data out)
-  - writing only inside the start folder and temporary folders – never in `.flashcat-backup/`
-  - no reading of user files outside the start folder (home folders, other users, external drives);
-    only system files and developer tools (`~/.local/bin`, `~/.cargo`, `~/.nvm`, `~/.gitconfig`, …)
+  - writing only inside the start folder and in a temporary folder of its own (deleted afterwards) –
+    never in `.flashcat-backup/`
+  - no reading of user files outside the start folder (home folders, other users, external drives,
+    other apps' temporary files); only system files and developer tools (`~/.local/bin`, `~/.cargo`,
+    `~/.nvm`, `~/.gitconfig`, …)
   - private data (`~/.*`, `~/Library`) and key files stay locked, even when you unlocked them for the
     file tools in this chat
   - no opening of apps or web pages (Launch Services, Apple Events), no clipboard, no keychain
 - No input (stdin is empty), the API key is removed from the environment, and the command is stopped
   after 2 minutes (the model can ask for up to 10).
+- Nothing keeps running afterwards: when the command ends, everything it started is stopped – also
+  processes that detached themselves (Flashcat finds them by a mark in their environment).
+- git can run programs by itself (hooks, and settings like `core.fsmonitor`, `core.pager` or
+  `alias.x = !…`) – the next time *you* use git, outside the sandbox. So after every command Flashcat
+  compares the git hooks and settings of the repositories in the folder: new hooks and settings that
+  can run programs are shown in red and undone unless you keep them. Normal changes (`git init`,
+  `user.name`, remotes, branches) pass without a question.
 
 **Internet**
 - Every web search and page fetch needs your `Y` – before any network traffic, including the DNS
@@ -64,6 +73,9 @@ own code, whatever the model asks for.
   breaks off does nothing.
 - The installer and `flashcat --update` install the newest **release** (a tagged version), not the
   `main` branch. Every push runs the safety tests in `tests/` on GitHub Actions.
+- The installer checks that the files it downloaded really are the release's version before it
+  replaces anything. The GitHub Actions workflow is pinned to a fixed commit of `actions/checkout`
+  and has read-only access.
 - These protect against a broken or half-finished state reaching you – they do not protect against a
   compromised GitHub account (whoever controls it could publish a release). The account uses two-factor
   authentication. For full control, read the code and install from a copy you checked (see README).
@@ -74,6 +86,9 @@ own code, whatever the model asks for.
   access to private data, it happens. Read what the prompt shows before you answer `Y`.
 - A command you allowed can delete or change anything **inside the start folder** (e.g. `rm -rf .`),
   and `/undo` cannot bring that back. Use git or a backup for folders you care about.
+- A command can also change files that *other* programs later run outside the sandbox – for example
+  a `Makefile`, `package.json` scripts or a build script. Flashcat guards git's own hooks and settings
+  (see above), not these. Look at what a command changed before you run the project yourself.
 - Everything you or Flashcat open is given to the local model, including files you attach with `@`.
 - Files in the start folder that are not in the private list (for example `.env` files in a project)
   are readable. Start Flashcat in the folder you want to work on, not a bigger one.
