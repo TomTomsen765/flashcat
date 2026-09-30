@@ -104,9 +104,17 @@ for f in "${FILES[@]}"; do
     curl -fsSL "$REPO_RAW/bin/$f" -o "$BIN/$f.new" || fail "Download of $f failed."
   fi
   chmod +x "$BIN/$f.new"
+done
+installed=$(/usr/bin/python3 "$BIN/flashcat-chat.py.new" --version | cut -d' ' -f2)
+if [[ -z $here && ${ref:-} == v[0-9]* && $installed != "${ref#v}" ]]; then
+  # right after a release, GitHub's file servers can still deliver the previous version for a few minutes
+  for f in "${FILES[@]}"; do rm -f "$BIN/$f.new"; done
+  fail "GitHub still delivered version $installed instead of ${ref#v} – nothing was changed. Please try again in a few minutes."
+fi
+for f in "${FILES[@]}"; do
   mv "$BIN/$f.new" "$BIN/$f"  # replace atomically, running Flashcat windows are not disturbed
 done
-ok "flashcat → $BIN"
+ok "flashcat $installed → $BIN"
 
 if /usr/bin/python3 -m pip install --user --quiet --disable-pip-version-check pygments >/dev/null 2>&1; then
   ok "syntax highlighting (pygments)"
