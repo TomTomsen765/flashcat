@@ -1976,7 +1976,7 @@ def start_card(loaded, sessions_count):
     hints.append("/help for commands")
     rest = [f"{DIM}{pretty_model()} · {round(state['context'] / 1024)}k context{RESET}",
             f"{DIM}{folder}{RESET}", f"{DIM}{' · '.join(hints)}{RESET}"]
-    title = f"{ORANGE}✻{RESET} {BOLD}Flashcat{RESET}"
+    title = f"{ORANGE}✻{RESET} {BOLD}Flashcat{RESET} {DIM}{VERSION}{RESET}"
     tag = f"{DIM}local · private{RESET}"
     # right-align the tag to the widest line of the card
     inner = min(term_width() - 8, max([visible_len(l) for l in rest] + [50]))
