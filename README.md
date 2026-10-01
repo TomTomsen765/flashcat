@@ -107,7 +107,7 @@ Then just talk to it:
 | `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
 | `/copy`, `/save` | copy or save the last answer |
 | `/export` | save the whole chat as a Markdown file |
-| `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard (text: just paste it with ⌘V) |
+| `⌘V`, `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard (text is pasted as usual) |
 | `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
 | `/compact` | summarize the chat to free context |
@@ -160,7 +160,7 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   free and runs entirely on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
-  screenshots via `Ctrl+V`; one-off questions with `flashcat "…"` and piped input; the window title shows
+  screenshots via `⌘V`; one-off questions with `flashcat "…"` and piped input; the window title shows
   `🐈 Flashcat · <folder>`, so you can tell several windows apart
 
 ## Safety

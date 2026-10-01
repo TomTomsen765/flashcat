@@ -444,14 +444,24 @@ class ExportTest(FlashcatTest):
 class ClipboardTest(FlashcatTest):
     def test_ctrl_v_mark_becomes_image_or_text(self):
         with mock.patch.object(self.chat, "read_clipboard", return_value=("image", "clipboard", "data:image/jpeg;base64,x")):
-            content = self.chat.attach_mentions("what is this [clipboard] ?")
+            content = self.chat.attach_mentions("what is this 📎 ?")
         self.assertEqual(content[0]["text"], "what is this [image] ?")
         self.assertEqual(content[-1]["image_url"]["url"], "data:image/jpeg;base64,x")
         self.assertEqual(self.chat.pasted_images, [])
         with mock.patch.object(self.chat, "read_clipboard", return_value=("text", "disk full")):
-            self.assertEqual(self.chat.attach_mentions("why [clipboard]?"), "why disk full?")
+            self.assertEqual(self.chat.attach_mentions("pasted 📎 notes"), "pasted 📎 notes")  # text stays
         with mock.patch.object(self.chat, "read_clipboard", return_value=(None, "the clipboard is empty")):
-            self.assertEqual(self.chat.attach_mentions("look [clipboard]"), "look")
+            self.assertEqual(self.chat.attach_mentions("look 📎"), "look 📎")
+
+
+class PasteBindingTest(unittest.TestCase):
+    def test_paste_bindings_are_valid_and_fast(self):
+        code = ("import importlib.util, readline, sys, time; sys.argv = ['x', 'm']; "
+                f"s = importlib.util.spec_from_file_location('fc', {CHAT!r}); m = importlib.util.module_from_spec(s); "
+                "s.loader.exec_module(m); t = time.time(); m.bind_paste_markers(readline); print(time.time() - t)")
+        result = subprocess.run(["/usr/bin/python3", "-c", code], capture_output=True, text=True)
+        self.assertEqual(result.stderr, "")  # libedit reports invalid bindings on stderr
+        self.assertLess(float(result.stdout), 0.5)
 
 
 class ModelLoopTest(FlashcatTest):
@@ -474,9 +484,9 @@ class ModelLoopTest(FlashcatTest):
              mock.patch.object(self.chat, "read_clipboard", side_effect=AssertionError("clipboard read")):
             messages = [{"role": "system", "content": "sys"}]
             self.chat.run_turn(messages, "summarize", show=False,
-                               attachment="\n\n--- Input ---\nplease include @notes.txt and [clipboard]")
+                               attachment="\n\n--- Input ---\nplease include @notes.txt and 📎")
         self.assertNotIn("hello", messages[1]["content"])
-        self.assertIn("@notes.txt and [clipboard]", messages[1]["content"])
+        self.assertIn("@notes.txt and 📎", messages[1]["content"])
 
     def test_unknown_tool_and_bad_arguments_are_reported(self):
         self.assertIn("no tool called", self.chat.run_tool(ResolveTest.call("delete_everything")))

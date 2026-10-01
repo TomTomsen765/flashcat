@@ -47,7 +47,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -2141,7 +2141,7 @@ def start_card(loaded, sessions_count):
         hints.append("instructions loaded")
     if sessions_count:
         hints.append(f"{sessions_count} earlier chat{'s' if sessions_count > 1 else ''} (/resume)")
-    hints.append("Ctrl+V pastes images · /help for commands")
+    hints.append("⌘V pastes images · /help for commands")
     rest = [f"{DIM}{pretty_model()} · {round(state['context'] / 1024)}k context{RESET}",
             f"{DIM}{folder}{RESET}", f"{DIM}{' · '.join(hints)}{RESET}"]
     title = f"{ORANGE}✻{RESET} {BOLD}Flashcat{RESET} {DIM}{VERSION}{RESET}"
@@ -2167,7 +2167,7 @@ def set_title(on):
         name = clean(os.path.basename(ROOT) or ROOT).replace("\007", "")
         print(f"\033[22;0t\033]0;🐈 Flashcat · {name}\007", end="", flush=True)
     else:
-        print("\033[23;0t", end="", flush=True)
+        print("\033[23;0t\033[?2004l", end="", flush=True)  # title back, bracketed paste off
 
 
 def cat_asleep():
@@ -2285,7 +2285,8 @@ def read_input():
     # pasted text arrives all at once: keep reading while more input is already waiting
     while sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.05)[0]:
         lines.append(sys.stdin.readline().rstrip("\n"))
-    return "\n".join(lines).strip()
+    # the lines after the first one of a multi-line paste bypass the line editor: remove the paste marks there
+    return "\n".join(lines).replace(PASTE_START, "").replace(PASTE_END, "").strip()
 
 
 COMMANDS = ["/help", "/undo", "/copy", "/save", "/export", "/paste", "/remember", "/resume", "/clear", "/compact",
@@ -2326,41 +2327,77 @@ def setup_completion():
     if "libedit" in (readline.__doc__ or ""):  # macOS' Python
         readline.parse_and_bind("bind ^I rl_complete")
         readline.parse_and_bind(f'bind -s ^V "{CLIPBOARD_MARK}"')  # Ctrl+V: paste an image (like in Claude Code)
+        bind_paste_markers(readline)
     else:
         readline.parse_and_bind("tab: complete")
         readline.parse_and_bind(f'"\\C-v": "{CLIPBOARD_MARK}"')
     if LIVE:
-        # no bracketed paste: with it, some terminals wrap pasted text in escape codes the line editor mangles
-        print("\033[?2004l", end="", flush=True)
+        # bracketed paste on (libedit) - ⌘V with an image in the clipboard then arrives as an empty paste
+        print("\033[?2004h" if "libedit" in (readline.__doc__ or "") else "\033[?2004l", end="", flush=True)
 
 
-PASTE_JXA = """
-function run(a) {
-  ObjC.import("AppKit");
-  var pb = $.NSPasteboard.generalPasteboard;
-  var url = pb.stringForType("public.file-url");
-  if (!url.isNil()) return "file:" + $.NSURL.URLWithString(url).path.js;
-  var types = ["public.png", "public.tiff", "public.jpeg", "public.heic"];
-  for (var i = 0; i < types.length; i++) {
-    var d = pb.dataForType(types[i]);
-    if (!d.isNil()) { d.writeToFileAtomically(a[0], true); return "image"; }
-  }
-  var text = pb.stringForType("public.utf8-plain-text");
-  return text.isNil() ? "" : "text:" + text.js;
-}
+PASTE_START, PASTE_END = "\033[200~", "\033[201~"
+
+
+def bind_paste_markers(readline):
+    """⌘V is handled by the terminal: with only an image in the clipboard it sends an empty "bracketed paste"
+    (start mark directly followed by the end mark), which becomes 📎 - so ⌘V attaches screenshots like
+    Ctrl+V. For text pastes both marks must vanish; libedit cannot bind the start mark alone next to the empty
+    paste (it would swallow the first pasted character), so every possible first character gets its own binding."""
+    def bind_str(ch):
+        return {'"': '\\"', "\\": "\\134", "^": "\\^"}.get(ch, ch)
+
+    readline.parse_and_bind(r'bind -s "\e[201~" ""')
+    readline.parse_and_bind(f'bind -s "\\e[200~\\e[201~" "{CLIPBOARD_MARK}"')
+    readline.parse_and_bind(r'bind -s "\e[200~\t" "\t"')
+    # ASCII, Latin letters with accents and umlauts, punctuation („“ – …), currency, letterlike symbols, arrows,
+    # box drawing and dingbats, emoji (all of Unicode would take seconds to bind)
+    ranges = ((32, 127), (0xA0, 0x250), (0x2000, 0x2070), (0x20A0, 0x20C0), (0x2100, 0x2200), (0x2500, 0x27C0),
+              (0x1F300, 0x1FB00))
+    chars = [c for r in ranges for c in range(*r)]
+    for c in chars:
+        ch = bind_str(chr(c))
+        readline.parse_and_bind(f'bind -s "\\e[200~{ch}" "{ch}"')
+
+
+# AppleScript's "the clipboard" (the same way Claude Code reads pasted images): a file copied in Finder, or the image
+# data written as PNG to the file given as argument
+PASTE_SCRIPT = """
+on run argv
+  repeat with t in (clipboard info)
+    if item 1 of t is «class furl» then return "file:" & POSIX path of (the clipboard as «class furl»)
+  end repeat
+  try
+    set img to (the clipboard as «class PNGf»)
+  on error
+    return ""
+  end try
+  set f to open for access POSIX file (item 1 of argv) with write permission
+  set eof f to 0
+  write img to f
+  close access f
+  return "image"
+end run
 """
-CLIPBOARD_MARK = "[clipboard]"  # Ctrl+V puts this into the input line; replaced by the clipboard when sent
+CLIPBOARD_TIMEOUT = 10
+# ⌘V (with an image in the clipboard) and Ctrl+V put this into the input line; the image is attached when the message
+# is sent. One character: Python's line editor draws a longer macro only as far as further keys arrive.
+CLIPBOARD_MARK = "📎"
 MAX_CLIPBOARD_TEXT = 100_000
 pasted_images = []  # (label, data URL) from /paste, sent with the next message
 
 
 def read_clipboard():
-    """What is in the clipboard: ("image", label, data URL) for a screenshot or an image file copied in Finder,
-    ("text", text), or (None, reason)."""
+    """The image in the clipboard: ("image", label, data URL) for a screenshot or an image file copied in Finder,
+    or (None, reason)."""
     with tempfile.TemporaryDirectory() as tmp:
-        target = os.path.join(tmp, "clipboard")
-        kind = subprocess.run(["osascript", "-l", "JavaScript", "-e", PASTE_JXA, target],
-                              capture_output=True, text=True, timeout=30).stdout.rstrip("\n")
+        target = os.path.join(tmp, "clipboard.png")
+        try:
+            kind = subprocess.run(["osascript", "-", target], input=PASTE_SCRIPT, capture_output=True, text=True,
+                                  timeout=CLIPBOARD_TIMEOUT).stdout.rstrip("\n")
+        except subprocess.TimeoutExpired:
+            return None, ("reading the clipboard took too long – macOS may be asking whether your terminal may "
+                          "access the clipboard (look for a dialog), then try again")
         if kind.startswith("file:"):
             try:
                 full = resolve(os.path.relpath(kind[5:], ROOT), ask=True)
@@ -2370,20 +2407,16 @@ def read_clipboard():
             if os.path.splitext(full)[1].lower() not in IMAGE_EXT:
                 return None, f"the copied file is no image – attach it with @{rel}"
             return "image", rel, image_data_url(full)
-        if kind == "image":
+        if kind == "image" and os.path.getsize(target):
             return "image", "clipboard", image_data_url(target)
-        if kind.startswith("text:") and kind[5:].strip():
-            return "text", clean(kind[5:])[:MAX_CLIPBOARD_TEXT]
-    return None, "the clipboard is empty"
+    return None, "there is no image in the clipboard"
 
 
 def paste_image():
     """/paste: queues the image in the clipboard for the next message."""
     got = read_clipboard()
     if got[0] != "image":
-        print(("There is no image in the clipboard – " if got[0] == "text" else f"Nothing attached: {got[1]}. ")
-              + ("paste text with ⌘V. " if got[0] == "text" else "")
-              + "Screenshot to the clipboard: ⌘⇧4 while holding Ctrl.\n")
+        print(f"Nothing attached: {got[1]}. Screenshot to the clipboard: ⌘⇧4 while holding Ctrl.\n")
         return
     _, label, url = got
     pasted_images.append((label, url))
@@ -2392,20 +2425,18 @@ def paste_image():
 
 
 def insert_clipboard(text):
-    """Replaces the [clipboard] marks that Ctrl+V put into the message: an image is attached (as from /paste),
-    text is inserted."""
+    """Replaces the 📎 marks that ⌘V / Ctrl+V put into the message with the image in the clipboard (as from
+    /paste). Without an image the text stays as it is (it may contain a 📎 of its own)."""
     if CLIPBOARD_MARK not in text:
         return text
     got = read_clipboard()
-    if got[0] == "image":
-        pasted_images.append(got[1:])
-        print(f"  {DIM}◇{RESET} attaches the image from the {'clipboard' if got[1] == 'clipboard' else got[1]}")
-        state["tools_shown"] = True
-        return text.replace(CLIPBOARD_MARK, "[image]")
-    if got[0] == "text":
-        return text.replace(CLIPBOARD_MARK, got[1])
-    print(f"  {YELLOW}✗{RESET} {DIM}nothing pasted: {got[1]}{RESET}")
-    return text.replace(CLIPBOARD_MARK, "").strip()
+    if got[0] != "image":
+        print(f"  {DIM}📎 nothing attached: {got[1]}{RESET}")
+        return text
+    pasted_images.append(got[1:])
+    print(f"  {DIM}◇{RESET} attaches the image from the {'clipboard' if got[1] == 'clipboard' else got[1]}")
+    state["tools_shown"] = True
+    return text.replace(CLIPBOARD_MARK, "[image]")
 
 
 MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')
@@ -2468,7 +2499,7 @@ HELP_COMMANDS = [
 HELP_TIPS = [
     ("@file", "attach a file", "Tab completes · @\"with spaces.pdf\""),
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
-    ("Ctrl+V", "paste a screenshot or image", "⌘⇧4 + Ctrl copies a screenshot"),
+    ("⌘V / Ctrl+V", "paste a screenshot or image", "⌘⇧4 + Ctrl copies a screenshot"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
     ("--model", "another model", "flashcat --models lists them"),
@@ -2752,7 +2783,7 @@ def chat_loop(messages):
 
 def run_turn(messages, user, show=True, attachment=""):
     """One question: sends it, runs the tools the model calls and appends everything to `messages`. `attachment`
-    (piped input) is added as it is: @file and [clipboard] in it are not resolved - only the user's own words are."""
+    (piped input) is added as it is: @file and 📎 in it are not resolved - only the user's own words are."""
     state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False)
     stats["questions"] += 1
     if show:
