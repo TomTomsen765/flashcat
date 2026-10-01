@@ -116,14 +116,7 @@ Then just talk to it:
 | `/think` | think more thoroughly (slower) |
 | `Esc` | cancel the current answer |
 | `@file` | attach a file to your message (Tab completes) |
-| drag an image in | drag an image from Finder into the terminal, or copy a photo on your iPhone and press `⌘V` (in terminals such as Hyper, not in macOS' own Terminal) – the long path turns into `📎[Image #1: name]`; also works for images outside the folder |
-
-> **Did you know?** You can show Flashcat something with your iPhone. Take a photo, tap *Copy* in the
-> Photos app, then press `⌘V` in Flashcat on your Mac – the photo is attached as `📎[Image #1]`, ready
-> for your question ("What does this letter say?", "Which plant is this?"). This uses Apple's Universal
-> Clipboard: both devices near each other, signed in to the same Apple Account, with Bluetooth, Wi-Fi
-> and Handoff turned on. The photo stays on your devices. It works in terminals such as Hyper, **not in
-> macOS' own Terminal**.
+| drag an image in | drag an image from Finder into the terminal – the long path turns into `📎[Image #1: name]`; also works for images outside the folder |
 
 Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
 `flashcat --backend` (LM Studio or Ollama), `flashcat --update`, `flashcat --version`, `flashcat --help`.
@@ -162,8 +155,7 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   rename and move files
 - **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
 - **Images:** describes and analyzes pictures in the folder – or screenshots you paste with Ctrl+V
-  (several per message; each one is kept the moment you paste it), images you drag into the terminal
-  and photos you copy on your iPhone and paste on the Mac (in terminals such as Hyper)
+  (several per message; each one is kept the moment you paste it), and images you drag into the terminal
 - **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one
   confirmation for the whole list, one `/undo` for all of it
 - **Coding:** reads, explains, writes and fixes code in the folder, and **runs your tests, scripts and

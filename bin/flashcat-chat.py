@@ -2691,9 +2691,7 @@ HELP_TIPS = [
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
     ("⌘V / Ctrl+V" if paste_key() == "⌘V" else "Ctrl+V", "paste a screenshot or image",
      "⌘⇧4 + Ctrl copies a screenshot"),
-    # a photo copied on the iPhone only arrives where ⌘V does (not in macOS' own Terminal)
-    ("iPhone", "copy a photo, press ⌘V here", "or drag an image in from Finder") if paste_key() == "⌘V"
-    else ("drag in", "drag an image in from Finder", "also from outside the folder"),
+    ("drag in", "drag an image in from Finder", "also from outside the folder"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
     ("--model", "another model", "flashcat --models lists them"),

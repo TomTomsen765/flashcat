@@ -464,11 +464,11 @@ class ClipboardTest(FlashcatTest):
             os.environ.pop("TERM_PROGRAM", None)
             self.assertEqual(self.chat.paste_key(), "Ctrl+V")
 
-    def test_iphone_tip_only_where_cmd_v_arrives(self):
-        for terminal, shown in (("Hyper", True), ("Apple_Terminal", False)):
+    def test_help_names_the_paste_key_of_the_terminal(self):
+        for terminal, key in (("Hyper", "⌘V / Ctrl+V"), ("Apple_Terminal", "Ctrl+V")):
             with mock.patch.dict(os.environ, {"TERM_PROGRAM": terminal}):
                 chat = load_chat(self.root, self.home)
-            self.assertEqual(any(key == "iPhone" for key, _, _ in chat.HELP_TIPS), shown)
+            self.assertIn(key, [row[0] for row in chat.HELP_TIPS])
 
 
 class PasteBindingTest(unittest.TestCase):
