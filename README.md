@@ -108,7 +108,8 @@ Then just talk to it:
 | `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
 | `/copy`, `/save` | copy or save the last answer |
 | `/export` | save the whole chat as a Markdown file |
-| `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message. `⌘V` does the same in terminals that pass it on, such as Hyper; macOS' own Terminal does not, so use `Ctrl+V` there (text is pasted with `⌘V` as usual) |
+| `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message. Works in every terminal |
+| `⌘V` | pastes text as usual. It attaches a screenshot only in terminals that pass the key on, such as Hyper – **not in macOS' own Terminal**, use `Ctrl+V` there |
 | `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
 | `/compact` | summarize the chat to free context |
