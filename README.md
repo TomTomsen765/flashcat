@@ -156,9 +156,9 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 - **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one
   confirmation for the whole list, one `/undo` for all of it
 - **Coding:** reads, explains, writes and fixes code in the folder, and **runs your tests, scripts and
-  builds** to check its work (in a sandbox, after you confirm the command). It is
-  no [Claude Code](https://claude.com/claude-code), but it does a solid job on simple tasks, and it is
-  free and runs entirely on your Mac
+  builds** to check its work (in a sandbox, after you confirm the command). It can't match the big
+  frontier models in the cloud, but it does a solid job on simple tasks, and it is free and runs entirely
+  on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
   screenshots via `⌘V`; one-off questions with `flashcat "…"` and piped input; the window title shows
