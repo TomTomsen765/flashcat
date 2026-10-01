@@ -38,9 +38,10 @@ brew install tomtomsen765/tap/flashcat
 
 Flashcat then offers to download the model the first time you start it.
 
-**You need** a Mac with Apple Silicon (M1 or newer). Flashcat uses Python from Apple's free command line
-tools – most Macs already have them, and if not, the installer tells you how to get them
-(`xcode-select --install`).
+**You need** a Mac with Apple Silicon and at least 24 GB of memory. Flashcat is tested on an M5 – older
+M chips should work too, but answers will be slower (see [Which Mac?](#which-mac)). It uses Python from
+Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to
+get them (`xcode-select --install`).
 
 ### Prefer to read the code before running it?
 
