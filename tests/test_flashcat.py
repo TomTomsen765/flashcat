@@ -315,6 +315,19 @@ class CommandTest(FlashcatTest):
         self.assertIn("world", result)
         self.assertTrue(os.path.exists(os.path.join(self.project, "made.txt")))
 
+    def test_server_gets_a_clear_hint(self):
+        result = self.run_cmd("/usr/bin/python3 -m http.server 18765")
+        self.assertIn("not permitted", result)
+        self.assertIn("Servers cannot run here", result)
+        for output in ("[11ty] Server error: listen EPERM: operation not permitted 0.0.0.0:8080",
+                       "listen tcp :8080: bind: operation not permitted"):
+            result = self.run_cmd(f"echo '{output}'; exit 1")
+            self.assertIn("Servers cannot run here", result, output)
+        # other blocked things keep the general hint, also when the program writes it in lower case
+        result = self.run_cmd("echo 'EPERM: operation not permitted, open /x'; exit 1")
+        self.assertIn("The sandbox blocked something", result)
+        self.assertNotIn("Servers cannot run here", result)
+
     def test_cannot_write_outside(self):
         target = os.path.join(self.outside, "new.txt")
         self.assertIn("not permitted", self.run_cmd(f"echo x > '{target}'"))

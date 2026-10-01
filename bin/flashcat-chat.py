@@ -48,7 +48,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.10"
+VERSION = "1.3.11"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -91,6 +91,9 @@ SYSTEM = (
     "as it appears in the file. "
     "You can run terminal commands with run_command (zsh, in this folder) - e.g. to run tests, scripts or "
     "builds and then fix what fails. They run in a sandbox: no internet, writing only inside this folder. "
+    "Servers and other programs that keep running (npm start, a development server, anything that listens on a "
+    "port) cannot run there - do not try them; tell the user to start them in another terminal window, and "
+    "run a build command that finishes instead. "
     "Never use commands to delete or overwrite files unless the user asked for exactly that; change files with "
     "edit_file / write_file, which keep a backup. "
     "IMPORTANT: The writing, command and internet tools ask the user for confirmation themselves. "
@@ -177,7 +180,8 @@ TOOLS = [
         "name": "run_command",
         "description": "Runs a terminal command (zsh) in the start folder and returns its output and exit code - "
                        "e.g. tests, scripts, builds, git status. Runs in a sandbox: no internet, it can only write "
-                       "inside the folder, no private data. Not interactive (no input). The user confirms first.",
+                       "inside the folder, no private data. Not interactive (no input), not for servers or other programs "
+                       "that keep running. The user confirms first.",
         "parameters": {"type": "object", "properties": {
             "command": {"type": "string", "description": "The command line, e.g. 'python3 -m unittest'"},
             "timeout": {"type": "integer", "description": "Seconds until the command is stopped, default 120, max 600"}},
@@ -946,6 +950,10 @@ def show_journal():
 # ---------- commands (confirmed, sandboxed) ----------
 
 RUN_TIMEOUT, RUN_MAX_TIMEOUT = 120, 600
+# a command that tried to listen on a port, e.g. Node: "listen EPERM: operation not permitted 0.0.0.0:8080",
+# Go: "listen tcp :8080: bind: operation not permitted", Python: "server_bind … Operation not permitted"
+SERVER_BLOCKED = re.compile(r"\blisten\b[^\n]*(EPERM|EACCES|not permitted)|\bbind\b[^\n]*not permitted|"
+                            r"server_bind[\s\S]{0,400}not permitted", re.IGNORECASE)
 MAX_OUTPUT = 20_000
 MAX_COMMAND = 2000
 # developer tools installed in the home folder that commands may read (not private: programs, no secrets)
@@ -1271,8 +1279,14 @@ def _run_sandboxed(command, timeout, own_tmp, run_id, git_before):
     body = [f"{DIM}{line[: term_width() - 10]}{RESET}" for line in tail] or [f"{DIM}(no output){RESET}"]
     print(card(f"{color}{'✓' if color == GREEN else '✗'}{RESET} {DIM}{status} · {fmt_num(time.time() - started)} s{RESET}",
                body))
-    note = (" The sandbox blocked something (Operation not permitted): internet, writing outside the folder or "
-            "private data are not available to commands." if "Operation not permitted" in output else "")
+    note = ""
+    if SERVER_BLOCKED.search(output):
+        note = (" The command tried to start a server (listen on a port). Servers cannot run here: commands have no "
+                "network and nothing keeps running after a command. Tell the user to start it themselves in another "
+                "terminal window in this folder, or run a build command that finishes instead.")
+    elif "operation not permitted" in output.lower():  # Node and Go write it in lower case
+        note = (" The sandbox blocked something (Operation not permitted): internet, writing outside the folder or "
+                "private data are not available to commands.")
     note += check_git_settings(git_before)
     return (f"Exit code: {code}" + (f" (stopped after {timeout} s)" if timed_out else "") + note + "\n"
             + (shorten_output(output) or "(no output)"))
