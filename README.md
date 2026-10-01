@@ -21,9 +21,10 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    both are installed, Flashcat asks once which one to use and remembers it – change it any time with
    `flashcat --backend`.
 
-   Flashcat is built and tested day to day with LM Studio. The Ollama side has only had a few short
-   test runs with a small test model, not with Gemma 4 – it should work, but expect rough edges. If you
-   use it with Ollama, please [let me know](https://github.com/TomTomsen765/flashcat/issues) how it runs.
+   I use Flashcat with LM Studio only, and everything runs great there. Ollama works, but it still
+   needs to be tested properly: so far it has only had a few short test runs with a small test model,
+   not with Gemma 4, so I can't say for sure how well it runs. If you use it with Ollama, please
+   [let me know](https://github.com/TomTomsen765/flashcat/issues) how it goes.
 2. Run this in the terminal:
 
 ```sh
