@@ -17,6 +17,7 @@ Usage: flashcat-chat.py MODEL [--continue] [QUESTION …]
 import base64
 import datetime
 import difflib
+import fcntl
 import hashlib
 import html
 import html.parser
@@ -47,7 +48,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.5"
+VERSION = "1.3.6"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -2273,7 +2274,11 @@ def compact(messages):
 def read_input():
     """One user message. Multi-line: paste it (detected automatically) or wrap it in lines with \"\"\"."""
     # orange ❯ like Claude (macOS' libedit moves marked-invisible color codes, so they are left unmarked)
-    first = input(f"{ORANGE}❯{RESET} ")
+    watcher = PasteWatcher()
+    try:
+        first = input(f"{ORANGE}❯{RESET} ")
+    finally:
+        watcher.stop()
     if first.strip() == '"""':
         lines = []
         while True:
@@ -2348,6 +2353,7 @@ def bind_paste_markers(readline):
         return {'"': '\\"', "\\": "\\134", "^": "\\^"}.get(ch, ch)
 
     readline.parse_and_bind(r'bind -s "\e[201~" ""')
+    readline.parse_and_bind(r'bind "\e[299~" ed-redisplay')  # PasteWatcher.REDRAW_KEY
     readline.parse_and_bind(f'bind -s "\\e[200~\\e[201~" "{CLIPBOARD_MARK}"')
     readline.parse_and_bind(r'bind -s "\e[200~\t" "\t"')
     # ASCII, Latin letters with accents and umlauts, punctuation („“ – …), currency, letterlike symbols, arrows,
@@ -2424,19 +2430,76 @@ def paste_image():
           f"{DIM}– now type your question{RESET}\n")
 
 
+class PasteWatcher:
+    """While the user types: when ⌘V / Ctrl+V put a 📎 into the line, the image is taken from the clipboard right
+    away and its name ("[Image #1]", "[Image #2: photo.jpg]") is written behind the 📎 - like in Claude Code.
+
+    The line editor only redraws when a key arrives, so afterwards a key that does nothing but redraw the line is
+    put into the terminal's input (TIOCSTI)."""
+
+    REDRAW_KEY = b"\033[299~"  # bound to ed-redisplay in bind_paste_markers
+
+    def __init__(self):
+        self.done = threading.Event()
+        if LIVE and sys.stdin.isatty() and "readline" in sys.modules:
+            threading.Thread(target=self._watch, daemon=True).start()
+
+    def stop(self):
+        self.done.set()
+
+    def _watch(self):
+        import readline
+        seen = 0
+        while not self.done.wait(0.03):
+            marks = readline.get_line_buffer().count(CLIPBOARD_MARK)
+            if marks <= seen:
+                seen = marks
+                continue
+            seen = marks
+            got = read_clipboard()
+            if got[0] != "image" or self.done.is_set():
+                continue  # no image (e.g. a 📎 inside pasted text): decided again when the message is sent
+            state["images"] = state.get("images", 0) + 1
+            n = state["images"]
+            pending_paste[n] = got[1:]
+            name = "" if got[1] == "clipboard" else f": {got[1]}"
+            readline.insert_text(f"[Image #{n}{name}] ")
+            try:
+                for b in self.REDRAW_KEY:
+                    fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSTI, bytes([b]))
+            except OSError:
+                pass  # the name appears with the next key
+
+
+pending_paste = {}  # image number -> (label, data URL), taken from the clipboard when it was pasted
+IMAGE_TOKEN = re.compile(re.escape(CLIPBOARD_MARK) + r"?\[Image #(\d+)(?:: [^\]]*)?\]")
+
+
 def insert_clipboard(text):
-    """Replaces the 📎 marks that ⌘V / Ctrl+V put into the message with the image in the clipboard (as from
-    /paste). Without an image the text stays as it is (it may contain a 📎 of its own)."""
-    if CLIPBOARD_MARK not in text:
-        return text
-    got = read_clipboard()
-    if got[0] != "image":
-        print(f"  {DIM}📎 nothing attached: {got[1]}{RESET}")
-        return text
-    pasted_images.append(got[1:])
-    print(f"  {DIM}◇{RESET} attaches the image from the {'clipboard' if got[1] == 'clipboard' else got[1]}")
-    state["tools_shown"] = True
-    return text.replace(CLIPBOARD_MARK, "[image]")
+    """Attaches the images pasted with ⌘V / Ctrl+V: "📎[Image #1]" names an image taken from the clipboard when it
+    was pasted; a 📎 without a name (sent before the clipboard was read) takes the clipboard now. Without an image
+    the text stays as it is (it may contain a 📎 of its own)."""
+    def attach(m):
+        n = int(m.group(1))
+        if n not in pending_paste:
+            return m.group(0)
+        pasted_images.append(pending_paste.pop(n))
+        return f"[Image #{n}]"
+
+    before = len(pasted_images)  # images queued by /paste were announced already
+    text = IMAGE_TOKEN.sub(attach, text)
+    pending_paste.clear()
+    if CLIPBOARD_MARK in text:
+        got = read_clipboard()
+        if got[0] == "image":
+            pasted_images.append(got[1:])
+            text = text.replace(CLIPBOARD_MARK, "[image]")
+        else:
+            print(f"  {DIM}📎 nothing attached: {got[1]}{RESET}")
+    for label, _ in pasted_images[before:]:
+        print(f"  {DIM}◇{RESET} attaches {'the image from the clipboard' if label == 'clipboard' else file_link(label)}")
+        state["tools_shown"] = True
+    return text
 
 
 MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')

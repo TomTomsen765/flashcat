@@ -464,6 +464,16 @@ class PasteBindingTest(unittest.TestCase):
         self.assertLess(float(result.stdout), 0.5)
 
 
+class PasteTokenTest(FlashcatTest):
+    def test_named_images_are_the_ones_taken_when_pasted(self):
+        self.chat.pending_paste.update({1: ("clipboard", "data:one"), 2: ("pic.png", "data:two")})
+        with mock.patch.object(self.chat, "read_clipboard", side_effect=AssertionError("read again")):
+            content = self.chat.attach_mentions("compare 📎[Image #1] with 📎[Image #2: pic.png] [Image #9]")
+        self.assertEqual(content[0]["text"], "compare [Image #1] with [Image #2] [Image #9]")
+        self.assertEqual([p["image_url"]["url"] for p in content if p["type"] == "image_url"], ["data:one", "data:two"])
+        self.assertEqual(self.chat.pending_paste, {})
+
+
 class ModelLoopTest(FlashcatTest):
     """The turn loop with a scripted model instead of LM Studio."""
 
