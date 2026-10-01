@@ -53,10 +53,16 @@ if [[ $1 == --update ]]; then
   fi
   # the newest release (not the development state on main): runs that release's installer, which replaces
   # Flashcat's files and keeps chats and the downloaded model
-  tag=$(curl -fsSL https://api.github.com/repos/$REPO/releases/latest 2>/dev/null \
+  fetch=(curl --proto '=https' --tlsv1.2 -fsSL)  # https only, also when a download is redirected
+  tag=$($fetch https://api.github.com/repos/$REPO/releases/latest 2>/dev/null \
         | /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null)
   if [[ -z $tag ]]; then
     echo "Update failed: GitHub could not be reached. Check the internet connection and try again." >&2
+    exit 1
+  fi
+  version_name='^v[0-9]+(\.[0-9]+)*$'  # the name becomes part of a download address
+  if [[ ! $tag =~ $version_name ]]; then
+    echo "Update failed: GitHub returned an unexpected version name. Nothing was changed." >&2
     exit 1
   fi
   current=$(/usr/bin/python3 $CHAT --version | cut -d' ' -f2)
@@ -65,7 +71,7 @@ if [[ $1 == --update ]]; then
     exit 0
   fi
   echo "Updating Flashcat $current → ${tag#v} …"
-  installer=$(curl -fsSL https://raw.githubusercontent.com/$REPO/$tag/install.sh) || {
+  installer=$($fetch https://raw.githubusercontent.com/$REPO/$tag/install.sh) || {
     echo "Update failed: the installer could not be downloaded. Try again later." >&2
     exit 1
   }

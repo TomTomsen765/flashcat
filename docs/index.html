@@ -303,7 +303,7 @@
             <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> (or
             <a href="https://ollama.com">Ollama</a>) and open it once.</li>
           <li>Run this in the terminal:
-            <div class="cmd"><code id="cmd">curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash</code>
+            <div class="cmd"><code id="cmd">curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash</code>
               <button class="copy" type="button" data-copy="cmd">Copy</button></div>
             <span class="or">or with <a href="https://brew.sh">Homebrew</a> – Flashcat offers to download the model on its first start:</span>
             <div class="cmd"><code id="cmd-brew">brew install tomtomsen765/tap/flashcat</code>
@@ -319,7 +319,7 @@
           Prefer to read the code before running it?
           <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a>
           Update later with <code>flashcat --update</code> (Homebrew: <code>brew upgrade flashcat</code>) – you only get published releases that passed the
-          automated safety tests.</p>
+          automated safety tests, and a published release cannot be changed afterwards.</p>
       </div>
     </section>
   </main>

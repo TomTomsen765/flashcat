@@ -643,5 +643,75 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("Unknown option", result.stderr)
 
 
+class DownloadTest(unittest.TestCase):
+    """What the installer and --update load from the internet."""
+    INSTALL = "https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash"
+
+    @staticmethod
+    def text(name):
+        with open(os.path.join(REPO, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_downloads_are_https_only(self):
+        for name in ("install.sh", "uninstall.sh", "bin/flashcat", "README.md", "docs/index.html"):
+            for line in self.text(name).splitlines():
+                if "curl " in line and "http://127.0.0.1" not in line:  # the local Ollama server is plain http
+                    self.assertIn("curl --proto '=https' --tlsv1.2 ", line, f"{name}: {line.strip()}")
+
+    def test_install_command_loads_the_release_copy(self):
+        # the installer attached to the newest release, not the state of the main branch
+        for name in ("install.sh", "README.md", "docs/index.html"):
+            self.assertIn(self.INSTALL, self.text(name), name)
+        self.assertIn(self.INSTALL.replace("install.sh", "uninstall.sh"), self.text("README.md"))
+        for name in ("install.sh", "uninstall.sh", "README.md", "docs/index.html"):
+            self.assertNotIn("raw.githubusercontent.com/TomTomsen765/flashcat/main", self.text(name), name)
+
+    def test_pygments_is_pinned_by_checksum(self):
+        text = self.text("install.sh")
+        self.assertRegex(text, r'\nPYGMENTS="pygments==\d+\.\d+\.\d+ --hash=sha256:[0-9a-f]{64}"\n')
+        self.assertEqual(text.count("pip install"), 1)
+        command = text[text.index("pip install"):].split("then")[0]
+        for option in ("--require-hashes", "--only-binary :all:", "--no-deps", '-r "$requirements"'):
+            self.assertIn(option, command)
+
+    def test_installer_checks_version_names(self):
+        text = self.text("install.sh")
+        function = text[text.index("valid_ref() {"):text.index("\n}\n", text.index("valid_ref() {")) + 3]
+
+        def valid(ref, kind):
+            return subprocess.run(["/bin/bash", "-c", function + 'valid_ref "$1" "$2"', "_", ref, kind]).returncode == 0
+
+        for ref in ("v1.3.10", "v2"):
+            self.assertTrue(valid(ref, "release"), ref)
+        for ref in ("", "main", "1.3.9", "v1.3.9/../../evil/repo/main", "v1.3;id", "v1.3 x"):
+            self.assertFalse(valid(ref, "release"), ref)
+        for ref in ("main", "v1.3.9", "feature/x-1"):
+            self.assertTrue(valid(ref, "any"), ref)
+        for ref in ("", "../x", "a..b", "-x", "a b", "a;b"):
+            self.assertFalse(valid(ref, "any"), ref)
+        self.assertIn('valid_ref "$ref" release ||', text)
+        self.assertIn('valid_ref "$ref" any ||', text)
+
+    def test_update_refuses_a_strange_version_name(self):
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        fake_bin = os.path.join(home, "fake-bin")
+        os.makedirs(fake_bin)
+        with open(os.path.join(fake_bin, "curl"), "w") as f:  # stands in for GitHub's answer
+            f.write('#!/bin/sh\necho "$@" >> "$HOME/curl.log"\n'
+                    'printf \'{"tag_name": "v1.3.9/../../../evil/repo/main"}\'\n')
+        os.chmod(os.path.join(fake_bin, "curl"), 0o755)
+        result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), "--update"], capture_output=True,
+                                text=True, env={"HOME": home, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+                                stdin=subprocess.DEVNULL)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unexpected version name", result.stderr)
+        with open(os.path.join(home, "curl.log")) as f:
+            calls = f.read().splitlines()
+        self.assertEqual(len(calls), 1, calls)  # asked for the newest release, downloaded nothing
+        self.assertIn("--proto =https --tlsv1.2", calls[0])
+
+
 if __name__ == "__main__":
     unittest.main()

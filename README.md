@@ -28,7 +28,7 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
 2. Run this in the terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash
 ```
 
 The installer checks your Mac, installs the newest release of the `flashcat` command into `~/.local/bin`
@@ -56,7 +56,7 @@ the files you just read instead of downloading them:
 ```sh
 git clone https://github.com/TomTomsen765/flashcat.git
 cd flashcat
-less install.sh          # what it does, in about 170 lines
+less install.sh          # what it does, in about 200 lines
 bash install.sh
 ```
 
@@ -65,7 +65,8 @@ What the installer changes on your Mac, and nothing else:
 - copies `flashcat`, `flashcat-chat.py` and `flashcat-cleanup` from `bin/` into `~/.local/bin`
   (from the folder you downloaded; the `curl` command above downloads the newest release instead)
 - adds `~/.local/bin` to your `PATH` in `~/.zshrc`, if it isn't there yet
-- installs the Python package `pygments` for colored code (`pip install --user`, optional)
+- installs the Python package `pygments` for colored code (`pip install --user`, optional) – one fixed
+  version, and only if the downloaded file has the checksum written in the installer
 - downloads the model through LM Studio or Ollama (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
 
 Flashcat itself is one Python file using only the standard library
@@ -227,8 +228,14 @@ locked.** Details: [SECURITY.md](SECURITY.md).
 **Installing and updating**
 - The installer only does what it describes. If the download breaks off, nothing runs at all.
 - You only get **published releases**, never the work in progress on the `main` branch:
-  the installer and `flashcat --update` fetch the newest release. Every change is checked by automated
-  safety tests on GitHub before it is released.
+  the install command loads the installer that is attached to the newest release, and that installer and
+  `flashcat --update` fetch the newest release. Every change is checked by automated safety tests on
+  GitHub before it is released.
+- A published release cannot be changed afterwards: GitHub locks it, and its version tag cannot be moved
+  or deleted.
+- Downloads use encrypted connections (https) only, also when they are redirected.
+- The one outside package (`pygments`, for colored code) is installed in one fixed version and only if
+  its checksum matches. Flashcat itself needs nothing but what your Mac already has.
 
 Found a security problem? Please report it privately – see [SECURITY.md](SECURITY.md).
 
@@ -249,7 +256,7 @@ downloaded model stay. Installed with Homebrew? Then use `brew upgrade flashcat`
 ## Uninstall
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/uninstall.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/uninstall.sh | bash
 ```
 
 ## License

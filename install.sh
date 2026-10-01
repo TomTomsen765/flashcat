@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Flashcat installer - a local AI assistant for the macOS terminal.
 #
-#   curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/install.sh | bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash
 #
+# (That address is the copy of this file attached to the newest release.)
 # Installs the newest release of flashcat into ~/.local/bin and downloads the default model (Gemma 4 26B,
 # ~15.6 GB) through LM Studio (or Ollama). LM Studio, LM Studio Bionic (https://lmstudio.ai/download) or
 # Ollama (https://ollama.com) must be installed first.
@@ -20,12 +21,22 @@ BIN="$HOME/.local/bin"
 LMS="$HOME/.lmstudio/bin/lms"
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"
 FILES=(flashcat flashcat-chat.py flashcat-cleanup)
+CURL=(curl --proto '=https' --tlsv1.2 -fsSL)  # https only, also when a download is redirected
+# the one outside package (colored code): exactly this file from PyPI, checked by its SHA-256
+PYGMENTS="pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
 
 ORANGE=$'\033[1;38;2;217;119;87m' DIM=$'\033[2m' GREEN=$'\033[32m' RED=$'\033[31m' BOLD=$'\033[1m' RESET=$'\033[0m'
 step() { printf '\n%s✻%s %s\n' "$ORANGE" "$RESET" "$1"; }
 ok()   { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
 note() { printf '  %s%s%s\n' "$DIM" "$1" "$RESET"; }
 fail() { printf '\n  %s✗%s %s\n\n' "$RED" "$RESET" "$1" >&2; exit 1; }
+valid_ref() {  # a version name must look like one before it becomes part of a download address
+  if [[ $2 == release ]]; then
+    [[ $1 =~ ^v[0-9]+(\.[0-9]+)*$ ]]
+  else
+    [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && $1 != *..* ]]
+  fi
+}
 ask()  {  # works even when the script is piped into bash (reads from the terminal)
   local answer=""
   if [[ -r /dev/tty ]]; then read -r -p "  ${ORANGE}?${RESET} $1 ${DIM}[Y/N]${RESET} " answer </dev/tty || true; fi
@@ -89,10 +100,13 @@ fi
 if [[ -z $here ]]; then
   # downloaded: install a published release, not the development state of the main branch
   ref=${FLASHCAT_REF:-}
-  if [[ -z $ref ]]; then
-    ref=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+  if [[ -n $ref ]]; then
+    valid_ref "$ref" any || fail "FLASHCAT_REF is not a valid tag or branch name."
+  else
+    ref=$("${CURL[@]}" "https://api.github.com/repos/$REPO/releases/latest" \
           | /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null) \
       || fail "GitHub could not be reached. Check the internet connection and try again."
+    valid_ref "$ref" release || fail "GitHub returned an unexpected version name – nothing was changed."
   fi
   REPO_RAW="https://raw.githubusercontent.com/$REPO/$ref"
   note "version ${ref#v}"
@@ -101,7 +115,7 @@ for f in "${FILES[@]}"; do
   if [[ -n $here && -f $here/bin/$f ]]; then  # running from a downloaded copy of the repository
     cp "$here/bin/$f" "$BIN/$f.new"
   else
-    curl -fsSL "$REPO_RAW/bin/$f" -o "$BIN/$f.new" || fail "Download of $f failed."
+    "${CURL[@]}" "$REPO_RAW/bin/$f" -o "$BIN/$f.new" || fail "Download of $f failed."
   fi
   chmod +x "$BIN/$f.new"
 done
@@ -116,11 +130,16 @@ for f in "${FILES[@]}"; do
 done
 ok "flashcat $installed → $BIN"
 
-if /usr/bin/python3 -m pip install --user --quiet --disable-pip-version-check pygments >/dev/null 2>&1; then
+requirements=$(mktemp)
+printf '%s\n' "$PYGMENTS" > "$requirements"
+# --require-hashes: a file with another checksum is refused; --only-binary: no setup script is run
+if /usr/bin/python3 -m pip install --user --quiet --disable-pip-version-check --require-hashes \
+     --only-binary :all: --no-deps -r "$requirements" >/dev/null 2>&1; then
   ok "syntax highlighting (pygments)"
 else
   note "pygments could not be installed – code is shown without colors."
 fi
+rm -f "$requirements"
 
 if [[ ":$PATH:" != *":$BIN:"* ]]; then
   rc="$HOME/.zshrc"

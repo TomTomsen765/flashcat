@@ -79,10 +79,21 @@ own code, whatever the model asks for.
 - `install.sh` and `uninstall.sh` are read completely before anything runs, so a download that
   breaks off does nothing.
 - The installer and `flashcat --update` install the newest **release** (a tagged version), not the
-  `main` branch. Every push runs the safety tests in `tests/` on GitHub Actions.
+  `main` branch. The install command itself loads the copy of `install.sh` that is attached to the
+  newest release. Every push runs the safety tests in `tests/` on GitHub Actions.
+- Releases are immutable on GitHub: a published release and the files attached to it cannot be changed,
+  and a repository rule stops version tags (`v*`) from being moved or deleted.
 - The installer checks that the files it downloaded really are the release's version before it
-  replaces anything. The GitHub Actions workflow is pinned to a fixed commit of `actions/checkout`
-  and has read-only access.
+  replaces anything, and that the version name GitHub returned looks like one (`v1.2.3`) before it
+  becomes part of a download address.
+- All downloads refuse anything but https, also after a redirect (`curl --proto '=https' --tlsv1.2`).
+- The only third-party code is the optional `pygments` package (colored code). The installer installs
+  one fixed version and only if the file's SHA-256 matches the one written in `install.sh`
+  (`pip --require-hashes`, wheel only, so no setup script runs). The Homebrew formula does not install it.
+- The GitHub Actions workflow is pinned to a fixed commit of `actions/checkout` and has read-only
+  access; the repository only allows GitHub's own actions, pinned to a commit. Releases are made by
+  hand, not by a workflow.
+- The Homebrew formula names the release archive with its SHA-256.
 - These protect against a broken or half-finished state reaching you – they do not protect against a
   compromised GitHub account (whoever controls it could publish a release). The account uses two-factor
   authentication. For full control, read the code and install from a copy you checked (see README).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Removes Flashcat. Keeps LM Studio and downloaded models; asks before deleting saved chats.
 #
-#   curl -fsSL https://raw.githubusercontent.com/TomTomsen765/flashcat/main/uninstall.sh | bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/uninstall.sh | bash
 { # everything in braces: bash reads it completely before running it, so a download that
   # breaks off in the middle runs nothing instead of half the script
 set -euo pipefail
