@@ -142,6 +142,13 @@
   .safety { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
   .safety .card h3 { display: flex; gap: 10px; align-items: baseline; }
   .note { color: var(--muted); font-size: 16px; margin-top: 28px; }
+  .tip { display: flex; gap: 18px; align-items: flex-start; margin: 20px 0 0; padding: 20px 24px;
+    background: linear-gradient(var(--orange-soft), var(--orange-soft)), var(--card);
+    border: 1px solid rgba(217, 119, 87, .3); border-radius: 16px; }
+  .tip .ico { flex: none; font: 700 15px var(--mono); color: var(--orange); background: var(--orange-soft);
+    padding: 3px 9px; border-radius: 7px; white-space: nowrap; }
+  .tip p { margin: 0; color: var(--muted); font-size: 16px; max-width: 80ch; }
+  .tip strong { color: var(--text); }
 
   .macs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
   .mac .size { font: 700 30px var(--sans); margin-bottom: 4px; }
@@ -248,10 +255,11 @@
           <h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. Paste screenshots
             with <code>⌘V</code> (they show up as <code>[Image #1]</code>), drag images in, or ask once without a chat: <code>cat log | flashcat "why?"</code></p></div>
       </div>
-      <p class="note"><strong>Did you know?</strong> You can show Flashcat something with your iPhone: take a
-        photo, tap <em>Copy</em>, then press <code>⌘V</code> in Flashcat on your Mac. The photo is attached as
-        <code>[Image #1]</code>, ready for your question. It uses Apple's Universal Clipboard (same Apple
-        Account, Bluetooth, Wi-Fi and Handoff on) and stays on your devices.</p>
+      <div class="tip"><span class="ico">Tip</span>
+        <p><strong>Did you know? You can show Flashcat something with your iPhone.</strong> Take a
+          photo, tap <em>Copy</em>, then press <code>⌘V</code> in Flashcat on your Mac. The photo is attached as
+          <code>[Image #1]</code>, ready for your question. It uses Apple's Universal Clipboard (same Apple
+          Account, Bluetooth, Wi-Fi and Handoff on) and stays on your devices.</p></div>
     </section>
 
     <section id="safety">
