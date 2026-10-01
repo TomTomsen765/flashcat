@@ -22,6 +22,7 @@ import hashlib
 import html
 import html.parser
 import http.client
+import inspect
 import ipaddress
 import json
 import os
@@ -48,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.11"
+VERSION = "1.3.12"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -66,8 +67,20 @@ MAX_READ = 100_000
 MAX_HITS = 100
 MAX_DOCS_SEARCHED = 200
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".Trash", "Library"}
+# text types the file tools may write: documents, data, web pages and templates, program code, settings.
+# Not in the list on purpose: types that macOS runs or opens with one double click (.command, .tool, .terminal,
+# .scpt, .applescript, .workflow, .plist, .webloc, .inetloc, …) and everything that is not plain text.
 WRITE_EXT = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".html", ".htm", ".css",
-             ".js", ".ts", ".py", ".sh", ".ini", ".log", ".tex"}
+             ".js", ".ts", ".py", ".sh", ".ini", ".log", ".tex",
+             ".rst", ".adoc", ".org", ".bib", ".srt", ".vtt", ".diff", ".patch", ".svg",
+             ".jsonc", ".json5", ".jsonl", ".ndjson", ".toml", ".cfg", ".conf", ".properties", ".graphql", ".gql",
+             ".proto", ".sql",
+             ".scss", ".sass", ".less",
+             ".njk", ".liquid", ".hbs", ".handlebars", ".mustache", ".ejs", ".pug", ".jinja", ".jinja2", ".j2",
+             ".twig", ".erb",
+             ".jsx", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
+             ".go", ".rs", ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".mm", ".swift", ".java", ".kt", ".kts",
+             ".rb", ".php", ".pl", ".lua", ".r", ".dart", ".scala", ".cs", ".ex", ".exs", ".zsh", ".bash", ".fish"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".tif", ".tiff"}
 TEXTUTIL_EXT = {".docx", ".doc", ".rtf", ".odt", ".html", ".htm", ".webarchive"}
 BACKUP_DIR = ".flashcat-backup"
@@ -493,8 +506,39 @@ def extract_text(full, allow_ocr=True):
     return text
 
 
+seen_files = []  # files the model read or wrote in this chat (relative paths, newest last)
+
+
+def remember_file(full):
+    rel = os.path.relpath(full, ROOT)
+    if rel in seen_files:
+        seen_files.remove(rel)
+    seen_files.append(rel)
+
+
+def file_with_text(old_text):
+    """The one file of this chat in which `old_text` occurs exactly once, or None. Used when the model leaves out
+    the path of an edit - it does that with long texts; the user still sees the file name and confirms."""
+    found = []
+    for rel in seen_files:
+        full = os.path.join(ROOT, rel)
+        if not old_text or not os.path.isfile(full) or not allowed(full):
+            continue
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                count = f.read().count(old_text)
+        except OSError:
+            continue
+        if count > 1:
+            return None
+        if count:
+            found.append(rel)
+    return found[0] if len(found) == 1 else None
+
+
 def read_file(path):
     full = resolve(path, ask=True)
+    remember_file(full)
     text = extract_text(full)
     if text is not None:
         if not text:
@@ -563,6 +607,10 @@ def check_target(path, allowed_ext):
     full = resolve(path, ask=True)
     rel = os.path.relpath(full, ROOT)
     if os.path.splitext(full)[1].lower() not in allowed_ext:
+        if len(allowed_ext) > 20:  # the long list of text types would only fill the model's context
+            ending = os.path.splitext(full)[1]
+            raise ValueError(f"Refused: {ending + ' files' if ending else 'files without an ending'} cannot be "
+                             "written, only plain text types (documents, data, web pages, templates, code, settings).")
         raise ValueError(f"Refused: only {', '.join(sorted(allowed_ext))} are allowed.")
     if in_backup(rel):
         raise ValueError("Refused: the backup folder is off limits.")
@@ -614,6 +662,7 @@ def save_with_backup(full, rel, content=None, source_file=None):
         with open(full, "w", encoding="utf-8") as f:
             f.write(content)
     journal.append({"type": "write", "full": full, "rel": rel, "backup": backup})
+    remember_file(full)
     (stats["changed"] if backup else stats["created"]).add(rel)
     note = f" Backup of the old version: {os.path.relpath(backup, ROOT)}" if backup else ""
     ui_break()
@@ -1940,6 +1989,15 @@ def run_tool(call):
         args = {}
     if not isinstance(args, dict):
         args = {}
+    recovered = ""
+    if name == "edit_file" and not args.get("path") and isinstance(args.get("old_text"), str):
+        guess = file_with_text(args["old_text"])  # the model tends to leave out the path of a long edit
+        if guess:
+            args["path"] = guess
+            recovered = f"(The path was missing; {guess} was used, the only file read in this chat with old_text.)\n"
+    needed = [p.name for p in inspect.signature(FUNCS[name]).parameters.values()
+              if p.default is p.empty] if name in FUNCS else []
+    missing = [key for key in needed if args.get(key) is None]
     raw = clean(str(args.get("path") or args.get("source") or args.get("pattern") or args.get("query")
                     or args.get("url") or args.get("command") or "."))
     if name == "move_files":
@@ -1953,6 +2011,8 @@ def run_tool(call):
         target = short
     elif name == "fetch_url":
         target = urllib.parse.urlparse(raw).netloc or short
+    elif missing:
+        target = "?"
     elif raw == ".":
         target = "the folder"
     else:
@@ -1967,7 +2027,12 @@ def run_tool(call):
     try:
         if name not in FUNCS:
             raise ValueError(f"there is no tool called {name}.")
+        if missing:  # say it in the model's terms, so it can repeat the call correctly
+            raise ValueError(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing – call {name} "
+                             f"again with all of: {', '.join(needed)}.")
         result = str(FUNCS[name](**args))
+        if recovered and not result.startswith(("Error", "Refused")):
+            result = recovered + result
     except TypeError as e:
         result = f"Error: wrong arguments for {name}: {e}"
     except FileNotFoundError:

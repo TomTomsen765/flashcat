@@ -26,8 +26,9 @@ own code, whatever the model asks for.
   clipboard of your devices is attached without that question.
 - Starting in a very broad folder (home folder, `/`, `/Users`, `/Volumes`) asks first, before
   anything is loaded.
-- Flashcat's own file tools cannot delete anything. They only write text files of common types, Word
-  and PDF documents; they refuse to write through hard links; moving (also many files at once) never
+- Flashcat's own file tools cannot delete anything. They only write plain text files of known types (documents,
+  data, web pages, templates, code, settings – never types that macOS runs with a double click, such as
+  `.command`), Word and PDF documents; they refuse to write through hard links; moving (also many files at once) never
   overwrites, and every move list is checked completely before you are asked.
 - Every write, change and move shows a preview and needs your `Y`. Old versions go to
   `.flashcat-backup/`, which Flashcat itself cannot write to or move, which must not be a link to

@@ -210,8 +210,20 @@ class ChangeTest(FlashcatTest):
         self.assertEqual(os.listdir(self.outside), ["secret.txt"])
 
     def test_only_text_types(self):
-        with self.assertRaises(ValueError):
-            self.chat.check_target("run.command", self.chat.WRITE_EXT)
+        # nothing that macOS runs or opens with a double click, nothing binary, nothing without an ending
+        for name in ("run.command", "run.tool", "start.terminal", "do.scpt", "do.applescript", "a.workflow",
+                     "agent.plist", "site.webloc", "site.inetloc", "App.app", "lib.dylib", "a.jar", "a.pkg",
+                     "photo.png", "Makefile", ".env"):
+            with self.assertRaises(ValueError, msg=name):
+                self.chat.check_target(name, self.chat.WRITE_EXT)
+        for name in ("layout.njk", "page.liquid", "app.jsx", "main.go", "style.scss", "settings.toml", "query.sql"):
+            self.assertEqual(self.chat.check_target(name, self.chat.WRITE_EXT)[1], name)
+
+    def test_template_file_can_be_changed(self):
+        self.write(os.path.join(self.project, "base.njk"), "<ul>\n</ul\n")
+        self.answers = ["y"]
+        self.assertNotIn("Refused", self.chat.edit_file("base.njk", "</ul\n", "</ul>\n"))
+        self.assertEqual(self.read("base.njk"), "<ul>\n</ul>\n")
 
 
 class MoveTest(FlashcatTest):
@@ -601,7 +613,39 @@ class ModelLoopTest(FlashcatTest):
 
     def test_unknown_tool_and_bad_arguments_are_reported(self):
         self.assertIn("no tool called", self.chat.run_tool(ResolveTest.call("delete_everything")))
-        self.assertIn("wrong arguments", self.chat.run_tool(ResolveTest.call("read_file", nope=1)))
+        self.assertIn("wrong arguments", self.chat.run_tool(ResolveTest.call("read_file", path="notes.txt", nope=1)))
+        result = self.chat.run_tool(ResolveTest.call("read_file", nope=1))
+        self.assertIn("path is missing – call read_file again with all of: path", result)
+
+    def test_edit_without_path_finds_the_file_that_was_read(self):
+        # the model leaves out the path of long edits; the file is found by its text, the user still confirms
+        edit = ResolveTest.call("edit_file", old_text="world", new_text="there")
+        self.assertIn("path is missing", self.chat.run_tool(edit))  # nothing read yet in this chat
+        self.assertEqual(self.read("notes.txt"), "hello\nworld\n")
+        self.chat.read_file("notes.txt")
+        self.answers = ["y"]
+        result = self.chat.run_tool(edit)
+        self.assertIn("The path was missing; notes.txt was used", result)
+        self.assertEqual(self.read("notes.txt"), "hello\nthere\n")
+        self.assertIn("notes.txt", self.out.getvalue())  # the card and the tool line name the file
+        # declined: nothing changes
+        self.answers = ["n"]
+        self.assertIn("declined", self.chat.run_tool(ResolveTest.call("edit_file", old_text="there", new_text="x")))
+        self.assertEqual(self.read("notes.txt"), "hello\nthere\n")
+
+    def test_edit_without_path_does_not_guess(self):
+        self.write(os.path.join(self.project, "copy.txt"), "hello\nworld\n")
+        self.chat.read_file("notes.txt")
+        self.chat.read_file("copy.txt")
+        self.answers = ["y"]
+        result = self.chat.run_tool(ResolveTest.call("edit_file", old_text="world", new_text="there"))
+        self.assertIn("path is missing", result)  # two files have the text
+        self.assertEqual(self.read("notes.txt"), "hello\nworld\n")
+        self.assertEqual(self.read("copy.txt"), "hello\nworld\n")
+        # a file the model has not read is never chosen, and old_text must be unique in the file
+        self.write(os.path.join(self.project, "other.txt"), "only here\n")
+        self.assertIn("path is missing", self.chat.run_tool(ResolveTest.call("edit_file", old_text="only here", new_text="x")))
+        self.assertIn("path is missing", self.chat.run_tool(ResolveTest.call("edit_file", old_text="l", new_text="x")))
 
 
 class CommandLineTest(unittest.TestCase):
