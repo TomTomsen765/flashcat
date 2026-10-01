@@ -108,7 +108,7 @@ Then just talk to it:
 | `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
 | `/copy`, `/save` | copy or save the last answer |
 | `/export` | save the whole chat as a Markdown file |
-| `⌘V`, `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message (text is pasted as usual) |
+| `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message. `⌘V` does the same in terminals that pass it on, such as Hyper; macOS' own Terminal does not, so use `Ctrl+V` there (text is pasted with `⌘V` as usual) |
 | `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
 | `/compact` | summarize the chat to free context |
@@ -159,7 +159,7 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 - **Files:** list, read, search, create and change text files; create Word (`.docx`) and PDF documents;
   rename and move files
 - **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
-- **Images:** describes and analyzes pictures in the folder – or screenshots you paste with ⌘V
+- **Images:** describes and analyzes pictures in the folder – or screenshots you paste with Ctrl+V
   (several per message; each one is kept the moment you paste it), images you drag into the terminal
   and photos you copy on your iPhone and paste on the Mac
 - **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one
@@ -170,7 +170,7 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
-  screenshots via `⌘V`; one-off questions with `flashcat "…"` and piped input; the window title shows
+  screenshots via `Ctrl+V`; one-off questions with `flashcat "…"` and piped input; the window title shows
   `🐈 Flashcat · <folder>`, so you can tell several windows apart
 
 ## Safety

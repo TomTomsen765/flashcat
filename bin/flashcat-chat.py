@@ -2142,7 +2142,7 @@ def start_card(loaded, sessions_count):
         hints.append("instructions loaded")
     if sessions_count:
         hints.append(f"{sessions_count} earlier chat{'s' if sessions_count > 1 else ''} (/resume)")
-    hints.append("⌘V pastes images · /help for commands")
+    hints.append(f"{paste_key()} pastes images · /help for commands")
     rest = [f"{DIM}{pretty_model()} · {round(state['context'] / 1024)}k context{RESET}",
             f"{DIM}{folder}{RESET}", f"{DIM}{' · '.join(hints)}{RESET}"]
     title = f"{ORANGE}✻{RESET} {BOLD}Flashcat{RESET} {DIM}{VERSION}{RESET}"
@@ -2345,9 +2345,9 @@ PASTE_START, PASTE_END = "\033[200~", "\033[201~"
 
 
 def bind_paste_markers(readline):
-    """⌘V is handled by the terminal: with only an image in the clipboard it sends an empty "bracketed paste"
-    (start mark directly followed by the end mark), which becomes 📎 - so ⌘V attaches screenshots like
-    Ctrl+V. For text pastes both marks must vanish; libedit cannot bind the start mark alone next to the empty
+    """⌘V is handled by the terminal: with only an image in the clipboard some (see CMD_V_TERMINALS) send an empty
+    "bracketed paste" (start mark directly followed by the end mark), which becomes 📎 - so ⌘V attaches screenshots
+    like Ctrl+V there. For text pastes both marks must vanish; libedit cannot bind the start mark alone next to the empty
     paste (it would swallow the first pasted character), so every possible first character gets its own binding."""
     def bind_str(ch):
         return {'"': '\\"', "\\": "\\134", "^": "\\^"}.get(ch, ch)
@@ -2389,6 +2389,16 @@ CLIPBOARD_TIMEOUT = 10
 # ⌘V (with an image in the clipboard) and Ctrl+V put this into the input line; the image is attached when the message
 # is sent. One character: Python's line editor draws a longer macro only as far as further keys arrive.
 CLIPBOARD_MARK = "📎"
+# Terminals known to pass ⌘V on when only an image is in the clipboard (as an empty paste). Others, like macOS'
+# own Terminal, send nothing then, so Flashcat never sees the key - Ctrl+V works in all of them.
+CMD_V_TERMINALS = ("Hyper",)
+
+
+def paste_key():
+    """The key to show for pasting images in this terminal."""
+    return "⌘V" if os.environ.get("TERM_PROGRAM") in CMD_V_TERMINALS else "Ctrl+V"
+
+
 MAX_CLIPBOARD_TEXT = 100_000
 pasted_images = []  # (label, data URL) from /paste, sent with the next message
 
@@ -2679,7 +2689,8 @@ HELP_COMMANDS = [
 HELP_TIPS = [
     ("@file", "attach a file", "Tab completes · @\"with spaces.pdf\""),
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
-    ("⌘V / Ctrl+V", "paste a screenshot or image", "⌘⇧4 + Ctrl copies a screenshot"),
+    ("⌘V / Ctrl+V" if paste_key() == "⌘V" else "Ctrl+V", "paste a screenshot or image",
+     "⌘⇧4 + Ctrl copies a screenshot"),
     ("iPhone", "copy a photo, press ⌘V here", "or drag an image in from Finder"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),

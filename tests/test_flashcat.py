@@ -453,6 +453,17 @@ class ClipboardTest(FlashcatTest):
         with mock.patch.object(self.chat, "read_clipboard", return_value=(None, "the clipboard is empty")):
             self.assertEqual(self.chat.attach_mentions("look 📎"), "look 📎")
 
+    def test_paste_key_depends_on_the_terminal(self):
+        for terminal, key in (("Apple_Terminal", "Ctrl+V"), ("Hyper", "⌘V"), ("something-else", "Ctrl+V")):
+            with mock.patch.dict(os.environ, {"TERM_PROGRAM": terminal}):
+                self.assertEqual(self.chat.paste_key(), key)
+                with redirect_stdout(io.StringIO()) as out:
+                    self.chat.start_card(False, 0)
+                self.assertIn(f"{key} pastes images", out.getvalue())
+        with mock.patch.dict(os.environ):
+            os.environ.pop("TERM_PROGRAM", None)
+            self.assertEqual(self.chat.paste_key(), "Ctrl+V")
+
 
 class PasteBindingTest(unittest.TestCase):
     def test_paste_bindings_are_valid_and_fast(self):
