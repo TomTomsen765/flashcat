@@ -1,10 +1,10 @@
 # Homebrew formula for Flashcat. The published copy lives in the tap repository TomTomsen765/homebrew-tap
 # (Formula/flashcat.rb); update url and sha256 there for every release:
-#   curl -fsSL https://github.com/TomTomsen765/flashcat/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+#   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
 class Flashcat < Formula
   desc "Local AI assistant for the macOS terminal (LM Studio or Ollama)"
   homepage "https://tomtomsen765.github.io/flashcat/"
-  url "https://github.com/TomTomsen765/flashcat/archive/refs/tags/v1.3.9.tar.gz"
+  url "https://github.com/TomTomsen765/flashcat/archive/refs/tags/v1.3.10.tar.gz"
   sha256 "REPLACE_WITH_SHA256_OF_THE_RELEASE_TARBALL"
   license "MIT"
 
