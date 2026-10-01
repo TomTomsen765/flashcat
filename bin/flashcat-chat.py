@@ -2331,7 +2331,7 @@ def setup_completion():
     readline.set_completer(complete)
     if "libedit" in (readline.__doc__ or ""):  # macOS' Python
         readline.parse_and_bind("bind ^I rl_complete")
-        readline.parse_and_bind(f'bind -s ^V "{CLIPBOARD_MARK}"')  # Ctrl+V: paste an image (like in Claude Code)
+        readline.parse_and_bind(f'bind -s ^V "{CLIPBOARD_MARK}"')  # Ctrl+V: paste an image
         bind_paste_markers(readline)
     else:
         readline.parse_and_bind("tab: complete")
@@ -2366,8 +2366,8 @@ def bind_paste_markers(readline):
         readline.parse_and_bind(f'bind -s "\\e[200~{ch}" "{ch}"')
 
 
-# AppleScript's "the clipboard" (the same way Claude Code reads pasted images): a file copied in Finder, or the image
-# data written as PNG to the file given as argument
+# AppleScript's "the clipboard" (reading it from JavaScript hung in some terminals): a file copied in Finder, or the
+# image data written as PNG to the file given as argument
 PASTE_SCRIPT = """
 on run argv
   repeat with t in (clipboard info)
@@ -2432,7 +2432,7 @@ def paste_image():
 
 class PasteWatcher:
     """While the user types: when ⌘V / Ctrl+V put a 📎 into the line, the image is taken from the clipboard right
-    away and its name ("[Image #1]", "[Image #2: photo.jpg]") is written behind the 📎 - like in Claude Code.
+    away and its name ("[Image #1]", "[Image #2: photo.jpg]") is written behind the 📎.
 
     The line editor only redraws when a key arrives, so afterwards a key that does nothing but redraw the line is
     put into the terminal's input (TIOCSTI)."""

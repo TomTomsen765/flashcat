@@ -107,7 +107,7 @@ Then just talk to it:
 | `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
 | `/copy`, `/save` | copy or save the last answer |
 | `/export` | save the whole chat as a Markdown file |
-| `⌘V`, `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message, like in Claude Code (text is pasted as usual) |
+| `⌘V`, `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message (text is pasted as usual) |
 | `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
 | `/compact` | summarize the chat to free context |
