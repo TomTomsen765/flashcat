@@ -474,6 +474,77 @@ class PasteTokenTest(FlashcatTest):
         self.assertEqual(self.chat.pending_paste, {})
 
 
+class TypedImageTest(FlashcatTest):
+    """Images the user drags into the terminal or pastes as a path (a photo copied on the iPhone)."""
+
+    def setUp(self):
+        super().setUp()
+        self.shared = os.path.join(self.home, "Library", "Group Containers",
+                                   "group.com.apple.coreservices.useractivityd", "shared-pasteboard", "items", "B87F")
+        os.makedirs(self.shared)
+        self.photo = os.path.join(self.shared, "IMG_6006.jpeg")
+        self.holiday = os.path.join(self.outside, "my holiday.png")
+        self.cover = os.path.join(self.home, "Library", "cover.png")
+        for p in (self.photo, self.holiday, self.cover, os.path.join(self.project, "pic.png")):
+            self.write(p, "image")
+        self.chat.image_data_url = lambda full: "data:" + os.path.basename(full)
+
+    def urls(self, content):
+        return [p["image_url"]["url"] for p in content if p["type"] == "image_url"] if isinstance(content, list) else []
+
+    def test_pasted_iphone_photo_is_attached_without_a_question(self):
+        content = self.chat.attach_mentions(f"'{self.photo}'what is this")
+        self.assertEqual(content[0]["text"], "[Image: IMG_6006.jpeg]what is this")
+        self.assertEqual(self.urls(content), ["data:IMG_6006.jpeg"])
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.chat.private_ok, set())  # nothing unlocked for the model's tools
+        with self.assertRaises(ValueError):
+            self.chat.view_image(self.photo)
+
+    def test_dragged_image_from_outside(self):
+        escaped = self.holiday.replace(" ", "\\ ")
+        for text in (f"look at {escaped}.", f'look at "{self.holiday}".', f"look at '{self.holiday}'."):
+            content = self.chat.attach_mentions(text)
+            self.assertEqual(content[0]["text"], "look at [Image: my holiday.png].", text)
+            self.assertEqual(self.urls(content), ["data:my holiday.png"])
+        content = self.chat.attach_mentions(os.path.join(self.project, "pic.png"))
+        self.assertEqual((content[0]["text"], self.urls(content)), ("[Image: pic.png]", ["data:pic.png"]))
+
+    def test_only_images_come_in_from_outside(self):
+        for path in (os.path.join(self.outside, "secret.txt"), os.path.join(self.home, ".zshrc"),
+                     os.path.join(self.outside, "missing.png")):
+            self.assertEqual(self.chat.attach_mentions(f"read '{path}' and {path}"), f"read '{path}' and {path}")
+
+    def test_private_image_asks_and_unlocks_nothing(self):
+        link = os.path.join(self.outside, "link.png")
+        os.symlink(self.cover, link)  # judged by where it really is
+        for path in (self.cover, "~/LIBRARY/cover.png", link):
+            self.asked.clear()
+            self.assertEqual(self.chat.attach_mentions(f"'{path}'"), f"'{path}'")  # answer: n
+            self.assertEqual(len(self.asked), 1, path)
+        self.answers = ["y"]
+        self.assertEqual(self.urls(self.chat.attach_mentions(f"'{self.cover}'")), ["data:cover.png"])
+        self.assertEqual(self.chat.private_ok, set())
+
+    def test_shortened_path_still_says_where_the_image_came_from(self):
+        self.chat.pending_paste.update({1: ("my holiday.png", "data:one"), 2: ("pic.png", "data:two")})
+        self.chat.pending_outside.add(1)
+        content = self.chat.attach_mentions("📎[Image #1: my holiday.png] and 📎[Image #2: pic.png]")
+        self.assertEqual(self.urls(content), ["data:one", "data:two"])
+        shown = self.out.getvalue()
+        self.assertEqual(shown.count("from outside the folder"), 1)
+        self.assertIn("my holiday.png", shown.split("from outside the folder")[0])
+        self.assertEqual(self.chat.pending_outside, set())
+
+    def test_piped_input_and_tool_results_attach_nothing(self):
+        replies = [{"role": "assistant", "content": "done"}]
+        with mock.patch.object(self.chat, "call_model", side_effect=lambda *a, **k: replies.pop(0)):
+            messages = [{"role": "system", "content": "sys"}]
+            self.chat.run_turn(messages, "summarize", show=False, attachment=f"\n\n--- Input ---\n'{self.photo}'")
+        self.assertIsInstance(messages[1]["content"], str)
+        self.assertIn(self.photo, messages[1]["content"])
+
+
 class ModelLoopTest(FlashcatTest):
     """The turn loop with a scripted model instead of LM Studio."""
 

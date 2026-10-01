@@ -17,6 +17,13 @@ own code, whatever the model asks for.
   `*.p12`, `*.pfx`, `*.keychain`, `.netrc`, `.git-credentials`). The check ignores upper/lower case,
   like macOS does. Unlocking needs your answer to a red prompt, covers only that one item and ends
   with the chat. Listing, searching and Tab completion skip locked items without asking.
+- One exception, for the user only: an image file whose absolute path stands in the message you typed
+  (dragged into the terminal, or a photo copied on the iPhone and pasted) is attached from outside the
+  start folder, and Flashcat prints that it did. Only image types, judged by where the file really is
+  (links are resolved); only your own words are searched – not piped input, files, web pages or anything
+  the model writes, and the model's tools still cannot open that path. An image in a private place
+  (`~/.*`, `~/Library`) asks in red and unlocks nothing; only the folder where macOS keeps the shared
+  clipboard of your devices is attached without that question.
 - Starting in a very broad folder (home folder, `/`, `/Users`, `/Volumes`) asks first, before
   anything is loaded.
 - Flashcat's own file tools cannot delete anything. They only write text files of common types, Word
@@ -90,6 +97,8 @@ own code, whatever the model asks for.
   a `Makefile`, `package.json` scripts or a build script. Flashcat guards git's own hooks and settings
   (see above), not these. Look at what a command changed before you run the project yourself.
 - Everything you or Flashcat open is given to the local model, including files you attach with `@`.
+- Text you paste into your message counts as your own words: if it contains the path of an image on
+  your Mac, that image is attached (you see the line "attaches … (from outside the folder)").
 - Files in the start folder that are not in the private list (for example `.env` files in a project)
   are readable. Start Flashcat in the folder you want to work on, not a bigger one.
 

@@ -48,7 +48,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.6"
+VERSION = "1.3.7"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -2447,11 +2447,66 @@ class PasteWatcher:
     def stop(self):
         self.done.set()
 
+    def _type(self, keys):
+        for b in keys:
+            fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSTI, bytes([b]))
+
+    def _shorten_path(self, readline, line):
+        """A pasted or dragged image path in the line (a photo copied on the iPhone arrives as a very long one) is
+        replaced by "📎[Image #N: name]", the image taken right away. Done with keys put into the terminal's input:
+        to the end of the line (^E), back to the path (^B), delete it, type the name. Images that need a question
+        first (private places) keep their path and are handled when the message is sent."""
+        for m in TYPED_PATH.finditer(line):
+            found = typed_image(m)
+            if not found or not os.access(found[0], os.R_OK):
+                continue
+            full, tail = found
+            shared = inside(full.lower(), SHARED_CLIPBOARD.lower())
+            if locked(full) and not shared:
+                continue
+            label = "clipboard" if shared else clean(os.path.relpath(full, ROOT) if inside(full, ROOT)
+                                                     else os.path.basename(full))
+            try:
+                url = image_data_url(full)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if self.done.is_set() or readline.get_line_buffer() != line:
+                return None  # the line changed meanwhile: the positions are no longer right
+            n = state.get("images", 0) + 1
+            name = "" if shared else ": " + (label if len(label) <= 40 else label[:39] + "…").replace("]", ")")
+            end = m.end() - len(tail)
+            token = f"{CLIPBOARD_MARK}[Image #{n}{name}]"
+            try:
+                self._type(b"\x05" + b"\x02" * (len(line) - end) + b"\x7f" * (end - m.start())
+                           + (token + ("" if line[end:] else " ")).encode()
+                           + (b"\x06" if line[end:end + 1] == " " else b""))  # behind the space that follows
+            except OSError:
+                return None  # the path stays and is attached when the message is sent
+            state["images"] = n
+            pending_paste[n] = (label, url)
+            if not shared and not inside(full, ROOT):
+                pending_outside.add(n)
+            return token
+        return None
+
     def _watch(self):
         import readline
-        seen = 0
+        seen, last, checked = 0, "", ""
         while not self.done.wait(0.03):
-            marks = readline.get_line_buffer().count(CLIPBOARD_MARK)
+            line = readline.get_line_buffer()
+            # only once the line stands still - a paste arrives character by character
+            token = None
+            if line == last and line != checked and "/" in line:
+                token = self._shorten_path(readline, line)
+                checked = line
+            last = line
+            if token:
+                deadline = time.time() + 2
+                while token not in readline.get_line_buffer() and time.time() < deadline and not self.done.wait(0.01):
+                    pass
+                seen = readline.get_line_buffer().count(CLIPBOARD_MARK)  # this 📎 is not a paste to look at
+                continue
+            marks = line.count(CLIPBOARD_MARK)
             if marks <= seen:
                 seen = marks
                 continue
@@ -2472,6 +2527,7 @@ class PasteWatcher:
 
 
 pending_paste = {}  # image number -> (label, data URL), taken from the clipboard when it was pasted
+pending_outside = set()  # image numbers of dragged or pasted image files from outside the start folder
 IMAGE_TOKEN = re.compile(re.escape(CLIPBOARD_MARK) + r"?\[Image #(\d+)(?:: [^\]]*)?\]")
 
 
@@ -2484,11 +2540,15 @@ def insert_clipboard(text):
         if n not in pending_paste:
             return m.group(0)
         pasted_images.append(pending_paste.pop(n))
+        if n in pending_outside:
+            outside.append(pasted_images[-1])
         return f"[Image #{n}]"
 
     before = len(pasted_images)  # images queued by /paste were announced already
+    outside = []
     text = IMAGE_TOKEN.sub(attach, text)
     pending_paste.clear()
+    pending_outside.clear()
     if CLIPBOARD_MARK in text:
         got = read_clipboard()
         if got[0] == "image":
@@ -2496,19 +2556,76 @@ def insert_clipboard(text):
             text = text.replace(CLIPBOARD_MARK, "[image]")
         else:
             print(f"  {DIM}📎 nothing attached: {got[1]}{RESET}")
-    for label, _ in pasted_images[before:]:
-        print(f"  {DIM}◇{RESET} attaches {'the image from the clipboard' if label == 'clipboard' else file_link(label)}")
+    for image in pasted_images[before:]:
+        label = image[0]
+        shown = f"{label} {DIM}(from outside the folder){RESET}" if image in outside else file_link(label)
+        print(f"  {DIM}◇{RESET} attaches {'the image from the clipboard' if label == 'clipboard' else shown}")
         state["tools_shown"] = True
     return text
+
+
+# where macOS keeps a photo copied on the iPhone or iPad (Universal Clipboard); ⌘V inserts its path there
+SHARED_CLIPBOARD = os.path.join(HOME, "Library", "Group Containers", "group.com.apple.coreservices.useractivityd",
+                                "shared-pasteboard")
+# an absolute path the way terminals insert a dragged or pasted file: '…', "…" or with \ before spaces
+TYPED_PATH = re.compile(r"""(?<!@)'((?:/|~/)[^'\n]+)'|(?<!@)"((?:/|~/)[^"\n]+)"|(?:^|(?<=\s))((?:/|~/)(?:\\.|[^\s\\])+)""")
+
+
+def typed_image(m):
+    """The image file a TYPED_PATH match names: (real path, characters behind the path that are not part of it)."""
+    raw = m.group(1) or m.group(2) or re.sub(r"\\(.)", r"\1", m.group(3))
+    for cand in ([raw, raw.rstrip(".,;:!?)")] if m.group(3) else [raw]):
+        full = os.path.realpath(HOME + cand[1:] if cand.startswith("~/") else cand)
+        if os.path.splitext(full)[1].lower() in IMAGE_EXT and os.path.isfile(full):
+            return full, raw[len(cand):]
+    return None
+
+
+def attach_typed_images(text):
+    """Images whose path the user put into the message - dragged into the terminal, or a photo copied on the iPhone
+    and pasted with ⌘V. Returns the text (path replaced by "[Image: name]") and the images as (label, data URL).
+
+    The only way a file outside the start folder gets in: images only, and only from the user's own words - the
+    model's tools stay inside the folder. Private places ask first (nothing is unlocked for the tools), except the
+    folder of the shared clipboard."""
+    images = []
+
+    def attach(m):
+        found = typed_image(m)
+        if not found:
+            return m.group(0)
+        full, tail = found
+        label = clean(os.path.basename(full))
+        try:
+            if inside(full, ROOT):
+                label = clean(os.path.relpath(resolve(full, ask=True), ROOT))
+            elif locked(full) and not inside(full.lower(), SHARED_CLIPBOARD.lower()):
+                if not confirm_private(full, "Attach this image?"):
+                    raise ValueError("you answered No")
+            if not os.access(full, os.R_OK):
+                raise ValueError("macOS does not let your terminal read it")
+            images.append((label, image_data_url(full)))
+        except Exception as e:
+            reason = "it could not be converted" if isinstance(e, subprocess.SubprocessError) else e
+            print(f"  {RED}✗{RESET} {label} {DIM}not attached: {reason}{RESET}")
+            return m.group(0)
+        shown = file_link(label) if inside(full, ROOT) else f"{label} {DIM}(from outside the folder){RESET}"
+        print(f"  {DIM}◇{RESET} attaches {shown}")
+        state["tools_shown"] = True
+        return f"[Image: {label}]" + tail
+
+    return TYPED_PATH.sub(attach, text), images
 
 
 MENTION = re.compile(r'(?:^|(?<=\s))@(?:"([^"]+)"|(\S+))')
 
 
 def attach_mentions(text):
-    """Resolves @file / @"file name" in the user's text. Returns message content (str or multi-part list)."""
+    """Resolves @file / @"file name" and the paths of dragged or pasted images in the user's text. Returns message
+    content (str or multi-part list)."""
     text = insert_clipboard(text)
-    blocks, images = [], []
+    text, images = attach_typed_images(text)
+    blocks = []
     for m in MENTION.finditer(text):
         name = m.group(1) or m.group(2)
         candidates = [name] if m.group(1) else [name, name.rstrip(".,;:!?)")]
@@ -2563,6 +2680,7 @@ HELP_TIPS = [
     ("@file", "attach a file", "Tab completes · @\"with spaces.pdf\""),
     ('"""', "multi-line input", "start and end with a line of \"\"\""),
     ("⌘V / Ctrl+V", "paste a screenshot or image", "⌘⇧4 + Ctrl copies a screenshot"),
+    ("iPhone", "copy a photo, press ⌘V here", "or drag an image in from Finder"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
     ("--model", "another model", "flashcat --models lists them"),

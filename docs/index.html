@@ -246,8 +246,12 @@
           <h3>Web</h3><p>Searches the web (DuckDuckGo) and reads web pages – only after you say yes.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div><span class="ico">❯_</span>
           <h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. Paste screenshots
-            with <code>⌘V</code> – they show up as <code>[Image #1]</code> – or ask once without a chat: <code>cat log | flashcat "why?"</code></p></div>
+            with <code>⌘V</code> (they show up as <code>[Image #1]</code>), drag images in, or ask once without a chat: <code>cat log | flashcat "why?"</code></p></div>
       </div>
+      <p class="note"><strong>Did you know?</strong> You can show Flashcat something with your iPhone: take a
+        photo, tap <em>Copy</em>, then press <code>⌘V</code> in Flashcat on your Mac. The photo is attached as
+        <code>[Image #1]</code>, ready for your question. It uses Apple's Universal Clipboard (same Apple
+        Account, Bluetooth, Wi-Fi and Handoff on) and stays on your devices.</p>
     </section>
 
     <section id="safety">
@@ -258,7 +262,7 @@
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Your files</h3>
           <p>Only the start folder and its subfolders. Hidden files in your home folder, <code>~/Library</code>
-            and private keys are locked. Commands run in a sandbox: no internet, they can only write inside
+            and private keys are locked. Only an image you drag or paste in yourself comes from outside. Commands run in a sandbox: no internet, they can only write inside
             the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone.</p></div>
         <div class="card"><div class="hide"><pre class="cat"></pre></div>
           <h3><span class="star">✻</span> Every change asks first</h3>
