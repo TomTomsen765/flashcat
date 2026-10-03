@@ -11,6 +11,7 @@ import io
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import subprocess
@@ -142,7 +143,7 @@ class HomeFolderTest(FlashcatTest):
         self.assertIn("not shown", listing)
 
     def test_search_skips_private_items(self):
-        self.assertEqual(self.chat.search("SECRET|PRIVATE|keychain"), "No matches.")
+        self.assertIn("No matches.", self.chat.search("SECRET|PRIVATE|keychain"))
 
     def test_unlock_needs_yes_and_covers_one_item(self):
         self.answers = ["n"]
@@ -779,7 +780,7 @@ class AutoCompactTest(FlashcatTest):
         summaries = []
 
         def model(messages, **kwargs):
-            if kwargs.get("tools") is False:
+            if kwargs.get("max_tokens"):
                 summaries.append(1)
                 return {"role": "assistant", "content": "- summary"}
             self.chat.state["used"] = 990  # every answer leaves the context full
@@ -790,6 +791,46 @@ class AutoCompactTest(FlashcatTest):
             self.chat.run_turn([{"role": "system", "content": "sys"}], "read the notes", show=False)
         self.assertEqual(len(summaries), 1)
         self.assertEqual(self.chat.state["last_answer"], "Done.")
+
+    def test_tool_result_is_cut_to_what_still_fits(self):
+        self.write(os.path.join(self.project, "big.txt"), "word " * 15_000)  # 75,000 characters
+        read = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "big.txt"}'}}
+            for i in range(2)]}
+        replies = [read, {"role": "assistant", "content": "Done."}]
+        self.chat.state.update(context=20_000, used=7_000)  # room for (20000 - 7000 - 3000) * 2.5 = 25,000 characters
+
+        def model(messages, **kwargs):
+            self.chat.state["used"] = 7_000
+            return replies.pop(0)
+
+        messages = [{"role": "system", "content": "sys"}]
+        with mock.patch.object(self.chat, "AUTO_COMPACT", 0), mock.patch.object(self.chat, "call_model", side_effect=model):
+            self.chat.run_turn(messages, "read it twice", show=False)
+        results = [m["content"] for m in messages if m["role"] == "tool"]
+        self.assertLess(len(results[0]), 25_200)
+        self.assertIn("context is nearly full", results[0])
+        self.assertLess(len(results[1]), 2_200)  # the second one only gets the minimum
+
+    def test_summary_request_looks_like_a_normal_one_and_is_limited(self):
+        # same tools and no tool_choice, so the model server can reuse its cache of the chat; a length limit
+        sent = []
+        answers = [b'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c", "function": '
+                   b'{"name": "list_dir", "arguments": "{}"}}]}}]}\n\ndata: [DONE]\n',
+                   b'data: {"choices": [{"delta": {"content": "- notes"}}]}\n\ndata: [DONE]\n']
+
+        def fake_urlopen(req, timeout=None):
+            sent.append(json.loads(req.data))
+            return io.BytesIO(answers.pop(0))
+
+        with mock.patch.object(self.chat.urllib.request, "urlopen", fake_urlopen):
+            new = self.chat.compact(self.history(), quiet=True)
+        self.assertEqual(len(sent[0]["tools"]), len(self.chat.TOOLS))
+        self.assertNotIn("tool_choice", sent[0])
+        self.assertEqual(sent[0]["max_tokens"], self.chat.SUMMARY_TOKENS)
+        self.assertNotIn("tools", sent[1])  # the model called a tool instead of summarizing: asked again without
+        self.assertEqual(sent[1]["max_tokens"], self.chat.SUMMARY_TOKENS)
+        self.assertIn("- notes", new[1]["content"])
 
     def test_not_before_the_limit_not_when_off_and_never_to_an_empty_chat(self):
         messages = self.history()
@@ -876,6 +917,37 @@ class TestLoopTest(FlashcatTest):
         self.assertTrue(os.path.exists(os.path.join(self.home, ".flashcat", "test-commands.json")))
         self.chat.test_command_command("off")
         self.assertEqual(self.chat.test_command(), "")
+
+
+class SearchTest(FlashcatTest):
+    def setUp(self):
+        super().setUp()
+        self.write(os.path.join(self.project, "contract.txt"),
+                   "Mietvertrag\nDie Laufzeit endet mit einer Frist von drei Monaten zum Quartalsende.\n")
+        self.write(os.path.join(self.project, "letter.txt"), "Wir bitten um eine Frist bis Montag.\n")
+
+    def test_several_words_find_a_topic_and_the_best_file_comes_first(self):
+        self.assertIn("No matches", self.chat.search("kündigen"))
+        result = self.chat.search("kündigen", more=["Kündigung", "Frist", "Laufzeit"])
+        lines = result.splitlines()
+        self.assertTrue(lines[0].startswith("contract.txt:2"), result)  # two of the words, letter.txt only one
+        self.assertTrue(lines[1].startswith("letter.txt:1"), result)
+        self.assertIn("(no matches for: kündigen, Kündigung)", result)
+
+    def test_one_pattern_works_as_before_and_odd_extra_words_do_no_harm(self):
+        self.assertEqual(self.chat.search("quartal"), "contract.txt:2: Die Laufzeit endet mit einer Frist von drei "
+                                                      "Monaten zum Quartalsende.")
+        self.assertIn("letter.txt:1", self.chat.search("montag", more="bis ("))  # a string, and no valid expression
+        self.assertIn("letter.txt:1", self.chat.run_tool(ResolveTest.call("search", pattern="Montag", more=["Frist", ""])))
+        with self.assertRaises(re.error):
+            self.chat.search("(")
+
+    def test_private_files_stay_out_with_several_words_too(self):
+        self.write(os.path.join(self.project, "server.pem"), "Frist PRIVATE KEY\n")
+        os.symlink(os.path.join(self.outside, "secret.txt"), os.path.join(self.project, "link.txt"))
+        result = self.chat.search("Frist", more=["outside", "PRIVATE"])
+        self.assertNotIn("server.pem", result)
+        self.assertNotIn("link.txt", result)
 
 
 class OverviewTest(FlashcatTest):

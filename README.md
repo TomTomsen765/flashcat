@@ -165,6 +165,9 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 - **Files:** list, read, search, create and change text files; create Word (`.docx`) and PDF documents;
   rename and move files
 - **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
+- **Finding things:** searches all files for several words at once – synonyms and other word forms of
+  what you asked for – and shows the files that contain most of them first, so "when can I cancel?"
+  also finds the contract that only says "notice period"
 - **Images:** describes and analyzes pictures in the folder – or screenshots you paste with Ctrl+V
   (several per message; each one is kept the moment you paste it), and images you drag into the terminal
 - **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one

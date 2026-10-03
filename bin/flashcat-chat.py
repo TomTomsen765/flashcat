@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -94,6 +94,8 @@ SYSTEM = (
     f"You work in the folder {ROOT} (and its subfolders); paths are relative to this folder. "
     "Use the tools when the user asks about files, folder contents, images, web pages or current "
     "information from the internet, instead of guessing. "
+    "search only finds literal text: when you look for a topic (\"when can I cancel?\"), search for several words "
+    "at once (pattern plus more: synonyms, other word forms, the language of the documents) instead of one. "
     "In a code project you do not know yet, call project_overview first: it lists the files with their classes "
     "and functions, so you find the right file without reading them all. "
     "You can read and search text, PDF, Word and Excel files (read_file reads scanned PDFs and images with text "
@@ -140,9 +142,15 @@ TOOLS = [
             "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "search",
-        "description": "Searches recursively for text (regular expression, case-insensitive) in text, PDF, Word and Excel files (not in scans).",
+        "description": "Searches recursively for text (regular expression, case-insensitive) in text, PDF, Word and "
+                       "Excel files (not in scans). It only finds text that stands there literally: when you look for "
+                       "a topic and do not know the wording, give several words at once in `more`.",
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string"},
+            "more": {"type": "array", "items": {"type": "string"},
+                     "description": "Other words the text could use for the same thing: synonyms, other word forms "
+                                    "(e.g. cancel, cancellation, terminate, notice period), and the words in the "
+                                    "language of the documents. Files that contain most of them come first."},
             "path": {"type": "string", "description": "Relative start folder, default '.'"}},
             "required": ["pattern"]}}},
     {"type": "function", "function": {
@@ -564,9 +572,23 @@ def read_file(path):
     return text
 
 
-def search(pattern, path="."):
-    rx = re.compile(pattern, re.IGNORECASE)
-    hits, docs = [], 0
+MAX_TERMS, MAX_RAW_HITS = 12, 2000
+
+
+def search(pattern, path=".", more=None):
+    """Lines that match `pattern` or one of the words in `more`. With several words, the files that contain the
+    most different ones come first - a cheap way to find a topic whose wording is not known."""
+    terms = [str(pattern)] + [str(t)[:100] for t in ([more] if isinstance(more, str) else more or []) if str(t).strip()]
+    terms = list(dict.fromkeys(terms))[:MAX_TERMS]
+    rxs = []
+    for i, term in enumerate(terms):
+        try:
+            rxs.append(re.compile(term, re.IGNORECASE))
+        except re.error:
+            if i == 0:
+                raise
+            rxs.append(re.compile(re.escape(term), re.IGNORECASE))  # an extra word is taken literally
+    found, order, docs, raw = {}, [], 0, 0  # file -> (set of matching terms, hit lines)
     for dirpath, dirnames, filenames in os.walk(resolve(path, ask=True)):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
                        and allowed(os.path.join(dirpath, d))]
@@ -593,12 +615,25 @@ def search(pattern, path="."):
                     text = data.decode("utf-8", errors="replace")
             except (OSError, subprocess.SubprocessError):
                 continue
+            rel = os.path.relpath(p, ROOT)
             for i, line in enumerate(text.splitlines(), 1):
-                if rx.search(line):
-                    hits.append(f"{os.path.relpath(p, ROOT)}:{i}{label}: {line.strip()[:200]}")
-                    if len(hits) >= MAX_HITS:
-                        return "\n".join(hits) + "\n… (more matches cut off)"
-    return "\n".join(hits) or "No matches."
+                matched = [n for n, rx in enumerate(rxs) if rx.search(line)]
+                if matched and raw < MAX_RAW_HITS:
+                    if rel not in found:
+                        found[rel] = (set(), [])
+                        order.append(rel)
+                    found[rel][0].update(matched)
+                    found[rel][1].append(f"{rel}:{i}{label}: {line.strip()[:200]}")
+                    raw += 1
+    if not found:
+        return "No matches." + (" Try other words for the same thing (more)." if len(terms) == 1 else "")
+    # files with the most different words first (the sort keeps the order they were found in otherwise)
+    hits = [h for rel in sorted(order, key=lambda r: -len(found[r][0])) for h in found[rel][1]]
+    out = "\n".join(hits[:MAX_HITS]) + ("\n… (more matches cut off)" if len(hits) > MAX_HITS or raw >= MAX_RAW_HITS else "")
+    missing = [terms[n] for n in range(len(terms)) if not any(n in f[0] for f in found.values())]
+    if len(terms) > 1 and missing:
+        out += "\n(no matches for: " + ", ".join(clean(t) for t in missing) + ")"
+    return out
 
 
 # ---------- project overview ----------
@@ -1967,7 +2002,7 @@ class EscToCancel:
         return False
 
 
-def call_model(messages, tools=True, show=True):
+def call_model(messages, tools=True, show=True, max_tokens=None):
     """Streams the reply: text is printed live as it arrives; returns the full assistant message."""
     payload = {"model": MODEL, "messages": messages, "temperature": 0.7, "stream": True,
                "stream_options": {"include_usage": True}}
@@ -1976,6 +2011,8 @@ def call_model(messages, tools=True, show=True):
         if state["plan"]:  # only the reading tools, and the instructions say why
             payload["tools"] = [t for t in TOOLS if t["function"]["name"] in PLAN_TOOLS]
             payload["messages"] = [{**messages[0], "content": messages[0]["content"] + PLAN_NOTE}] + messages[1:]
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
     if not state["thinking"] and not state.get("no_reasoning_effort"):
         payload["reasoning_effort"] = "none"
     headers = {"Content-Type": "application/json"}
@@ -2501,6 +2538,9 @@ def auto_compact(messages, task=""):
     return True
 
 
+SUMMARY_TOKENS = 1500  # the most a summary may take (about two minutes of writing on a slow Mac)
+
+
 def compact(messages, quiet=False, task=""):
     if len(messages) < 3:
         print("Nothing to summarize yet.\n")
@@ -2511,10 +2551,20 @@ def compact(messages, quiet=False, task=""):
         "Say which files you already read or changed and what matters in them (names of functions, key values). "
         + ("You are in the middle of a task: also keep what you already did and found out for it with the tools "
            "(the parts of file contents and command results that matter) and what is still to do. " if task else "") +
-        "Only the summary, as bullet points, in the language of the conversation.")}]
+        "Only the summary, as short bullet points (at most about 400 words, never whole file contents), in the "
+        "language of the conversation.")}]
     if not quiet:
         print(f"{DIM}  summarizing the chat …{RESET}")
-    summary = call_model(request, tools=False, show=False)["content"].strip()
+    # Asked exactly like every other request (same tool list, no tool_choice - "none" drops the tools from the
+    # prompt): the model server then reuses what it has already processed of the chat instead of reading all of it
+    # again, which takes minutes with a full context. The length is limited: without a limit the model sometimes
+    # copies whole files into the summary, at a few words per second.
+    phase, state["phase"] = state["phase"], "summarizing"
+    reply = call_model(request, show=False, max_tokens=SUMMARY_TOKENS)
+    if reply.get("tool_calls") or not reply["content"].strip():  # it called a tool instead: ask without tools
+        reply = call_model(request, tools=False, show=False, max_tokens=SUMMARY_TOKENS)
+    state["phase"] = phase
+    summary = reply["content"].strip()
     if not summary:  # better a full chat than an empty one
         if not quiet:
             print("The model returned no summary – the chat stays as it is.\n")
@@ -2604,7 +2654,8 @@ def command_command(arg):
     name, text = name.lstrip("/").lower(), text.strip()
     if not name:
         mine = custom_commands()
-        rows = [f"{ORANGE}/{n:<14}{RESET}{clean(t.splitlines()[0])[:70]}" for n, t in mine.items()]
+        room = max(20, term_width() - 24)  # one line each, also in a narrow window
+        rows = [f"{ORANGE}/{n:<14}{RESET}{clean(t.splitlines()[0])[:room]}" for n, t in mine.items()]
         print(card(f"{ORANGE}✻{RESET} Your commands", rows or [f"{DIM}(none yet){RESET}"]))
         print(f"{DIM}  new: /command name prompt text ($ARGS stands for what you type after /name)\n"
               f"  or put name.md into ~/.flashcat/commands/ · remove one by deleting its file{RESET}\n")
@@ -3479,6 +3530,11 @@ def chat_loop(messages):
             print(f"\n  {RED}✗ Error:{RESET} {e}\n")
 
 
+# a tool result must still fit into the context: tokens kept free for the answer, a careful characters-per-token
+# guess (prose has about 4, numbers and code fewer), and the least a result is cut down to
+RESERVED_TOKENS, CHARS_PER_TOKEN, MIN_RESULT = 3000, 2.5, 2000
+
+
 def run_turn(messages, user, show=True, attachment=""):
     """One question: sends it, runs the tools the model calls and appends everything to `messages`. `attachment`
     (piped input) is added as it is: @file and 📎 in it are not resolved - only the user's own words are."""
@@ -3522,8 +3578,14 @@ def run_turn(messages, user, show=True, attachment=""):
                     state["tools_shown"] = True
                     continue
             break
+        room = int((state["context"] - state["used"] - RESERVED_TOKENS) * CHARS_PER_TOKEN) if state["used"] else MAX_READ * 4
         for c in msg["tool_calls"]:
-            messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(c)})
+            result = run_tool(c)
+            if len(result) > max(room, MIN_RESULT):  # more than still fits into the context
+                result = (result[:max(room, MIN_RESULT)] + "\n… (shortened: the context is nearly full. Tell the "
+                          "user that /compact or a new chat (/clear) frees space.)")
+            room -= len(result)
+            messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         while pending_images:
             rel, url = pending_images.pop(0)
             messages.append({"role": "user", "content": [
