@@ -118,8 +118,12 @@ Then just talk to it:
 | `⌘V` | pastes text as usual. It attaches a screenshot only in terminals that pass the key on, such as Hyper – **not in macOS' own Terminal**, use `Ctrl+V` there |
 | `/remember` | note something for all future chats (`/remember I use metric units`) |
 | `/resume` | earlier chats in this folder |
-| `/compact` | summarize the chat to free context |
+| `/compact` | summarize the chat to free context (happens by itself when the context is 80 % full) |
 | `/think` | think more thoroughly (slower) |
+| `/plan` | plan first: Flashcat only reads and presents a plan, nothing is changed or run. `/plan` again switches it off, then say "go ahead" |
+| `/model` | list the installed models, `/model <name>` switches without leaving the chat (LM Studio) |
+| `/test` | `/test <command>` sets a test command for this folder: it runs by itself after Flashcat changed files, and failures go back to the model (`/test off` removes it) |
+| `/command` | your own commands: `/command explain Explain $ARGS for a beginner` creates `/explain` (saved in `~/.flashcat/commands/`) |
 | `Esc` | cancel the current answer |
 | `@file` | attach a file to your message (Tab completes) |
 | drag an image in | drag an image from Finder into the terminal – the long path turns into `📎[Image #1: name]`; also works for images outside the folder |
@@ -145,6 +149,7 @@ and whenever it changes.
 | Environment variable | |
 |---|---|
 | `FLASHCAT_CONTEXT` | context size in tokens – default 65536 on Macs with 24 GB or more, 16384 below |
+| `FLASHCAT_AUTOCOMPACT` | share of the context at which the chat is summarized by itself – default `0.8`, `0` switches it off |
 | `FLASHCAT_API_KEY` | only needed if you turned on *Require authentication* in LM Studio's server settings |
 | `FLASHCAT_BACKEND` | `lmstudio` or `ollama` for this start – otherwise the one that is installed, or your choice from `flashcat --backend` when both are |
 
@@ -165,10 +170,14 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 - **Files, in bulk:** renames or moves many files in one step (e.g. "name all photos by date") – one
   confirmation for the whole list, one `/undo` for all of it
 - **Coding:** reads, explains, writes and fixes code in the folder, and **runs your tests, scripts and
-  builds** to check its work (in a sandbox, after you confirm the command). It can't match the big
+  builds** to check its work (in a sandbox, after you confirm the command). It gets an overview of a
+  project first (files with their classes and functions), can **plan before it changes anything**
+  (`/plan`), and with a test command set (`/test`) it **runs your tests after every change** and fixes
+  what fails. It can't match the big
   frontier models in the cloud, but it does a solid job on simple tasks, and it is free and runs entirely
   on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
+- **Long chats:** when the context fills up, the chat is summarized by itself, so you can keep going
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
   screenshots via `Ctrl+V`; one-off questions with `flashcat "…"` and piped input; the window title shows
   `🐈 Flashcat · <folder>`, so you can tell several windows apart
@@ -204,6 +213,11 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   started keeps running afterwards.
 - If a command adds git hooks or git settings that would run programs the next time you use git
   (outside the sandbox), Flashcat shows them in red and undoes them unless you keep them.
+- A test command you set with `/test` is the one command that runs without a question – you typed it
+  yourself. It runs in the same sandbox, and it is stored in `~/.flashcat`, not in the folder, so a
+  downloaded project or the model cannot set or change it.
+- In plan mode (`/plan`) the code refuses every tool that changes or runs something, whatever the
+  model tries.
 
 **Every change asks first**
 - You see a preview of every new file and every change before you answer `Y`. Long previews are
@@ -220,6 +234,8 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   marks) are removed from everything Flashcat shows.
 
 **Instructions from others**
+- Your own commands (`/command`) are read from `~/.flashcat/commands/` only – a folder cannot bring
+  commands of its own, and the names of built-in commands cannot be taken.
 - A `FLASHCAT.md` in a folder (e.g. in a downloaded project) is shown to you and only used after you
   allow it – and again whenever it changes.
 

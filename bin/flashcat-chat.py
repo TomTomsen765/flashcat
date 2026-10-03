@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.13"
+VERSION = "1.4.0"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -94,6 +94,8 @@ SYSTEM = (
     f"You work in the folder {ROOT} (and its subfolders); paths are relative to this folder. "
     "Use the tools when the user asks about files, folder contents, images, web pages or current "
     "information from the internet, instead of guessing. "
+    "In a code project you do not know yet, call project_overview first: it lists the files with their classes "
+    "and functions, so you find the right file without reading them all. "
     "You can read and search text, PDF, Word and Excel files (read_file reads scanned PDFs and images with text "
     "via text recognition), look at images (view_image), search the internet (web_search) and read web pages "
     "(fetch_url). For information from the internet, name the source with its address (URL). "
@@ -124,6 +126,12 @@ TOOLS = [
             "path": {"type": "string", "description": "Relative path, '.' for the start folder"},
             "show_private": {"type": "boolean", "description": "Also list private items (hidden settings, keys, "
                              "~/Library). Only when the user explicitly asks; the user must allow it."}}}}},
+    {"type": "function", "function": {
+        "name": "project_overview",
+        "description": "Overview of a project: its files with line counts and the classes, functions and headings "
+                       "defined in them. Use it first in a code project you do not know, then read the files you need.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Relative start folder, default '.'"}}}}},
     {"type": "function", "function": {
         "name": "read_file",
         "description": "Reads a file: text, PDF, Word (docx/doc/rtf/odt) or Excel (xlsx). Scanned PDFs and images are read via text recognition.",
@@ -593,6 +601,92 @@ def search(pattern, path="."):
     return "\n".join(hits) or "No matches."
 
 
+# ---------- project overview ----------
+
+MAX_OVERVIEW_FILES, MAX_OVERVIEW_NAMES, MAX_OVERVIEW = 300, 40, 15_000
+_MODIFIERS = r"(?:(?:public|private|protected|internal|open|final|static|abstract|override|sealed|data|export|default|async|pub(?:\([^)]*\))?)\s+)*"
+# per file type: what a line that defines something looks like (the name is what the model searches for later)
+DEFINITIONS = [
+    ((".py",), re.compile(r"^(?P<indent>[ \t]*)(?:async\s+)?(?P<kind>class|def)\s+(?P<name>\w+)")),
+    ((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro"), re.compile(
+        r"^(?P<indent>[ \t]*)" + _MODIFIERS + r"(?:(?P<kind>function\*?|class|interface|type|enum)\s+(?P<name>[\w$]+)|"
+        r"(?:const|let|var)\s+(?P<name2>[\w$]+)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[\w$]+\s*=>))")),
+    ((".go",), re.compile(r"^(?P<indent>)(?P<kind>func|type)\s+(?:\([^)]*\)\s*)?(?P<name>\w+)")),
+    ((".rs",), re.compile(r"^(?P<indent>[ \t]*)" + _MODIFIERS + r"(?P<kind>fn|struct|enum|trait|mod)\s+(?P<name>\w+)")),
+    ((".swift", ".kt", ".kts", ".java", ".cs", ".scala", ".dart", ".php"), re.compile(
+        r"^(?P<indent>[ \t]*)" + _MODIFIERS + r"(?P<kind>class|struct|enum|protocol|interface|extension|func|fun|"
+        r"function|object|trait)\s+(?P<name>\w+)")),
+    ((".rb",), re.compile(r"^(?P<indent>[ \t]*)(?P<kind>class|module|def)\s+(?P<name>[\w.?!]+)")),
+    ((".sh", ".zsh", ".bash"), re.compile(r"^(?P<indent>)(?:function\s+)?(?P<name>[\w-]+)\s*\(\)")),
+    ((".md",), re.compile(r"^(?P<indent>)(?P<kind>#{1,2})\s+(?P<name>.+?)\s*$")),
+]
+
+
+def definitions(full):
+    """(number of lines, names defined in the file) - classes, functions and headings; a leading "." marks
+    one inside a class. None for files that are not text."""
+    rx = next((r for exts, r in DEFINITIONS if os.path.splitext(full)[1].lower() in exts), None)
+    try:
+        with open(full, "rb") as f:
+            data = f.read(400_000)
+    except OSError:
+        return None
+    if b"\0" in data[:4096]:
+        return None
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    names = []
+    for line in lines if rx else []:
+        m = rx.match(line)
+        if not m:
+            continue
+        depth = len(m.group("indent").expandtabs(4))
+        if depth > 4:
+            continue  # local helpers deep inside a function
+        groups = m.groupdict()
+        name = clean(groups.get("name") or groups.get("name2") or "")[:60]
+        kind = groups.get("kind") or ""
+        label = ("." if depth else "") + (f"{kind} {name}" if kind in ("class", "#", "##") else name)
+        if name and label not in names:
+            names.append(label)
+    return len(lines), names
+
+
+def project_overview(path="."):
+    start = resolve(path, ask=True)
+    out, files, full_up = [], 0, False
+    for dirpath, dirnames, filenames in os.walk(start):
+        if full_up:
+            break
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
+                             and allowed(os.path.join(dirpath, d)))
+        others = []
+        for name in sorted(filenames):
+            p = os.path.join(dirpath, name)
+            if name.startswith(".") or not allowed(p):  # hidden, private, or a link to a file outside the folder
+                continue
+            if files >= MAX_OVERVIEW_FILES:
+                full_up = True  # a very large folder: stop reading files
+                break
+            rel = clean(os.path.relpath(p, ROOT))
+            found = definitions(p) if os.path.splitext(name)[1].lower() not in IMAGE_EXT else None
+            if found is None or not found[1] and os.path.splitext(name)[1].lower() not in WRITE_EXT:
+                others.append(clean(name))
+                files += len(others) > 8  # long runs of other files (photos, …) count towards the limit too
+                continue
+            files += 1
+            count, names = found
+            more = f", … {len(names) - MAX_OVERVIEW_NAMES} more" if len(names) > MAX_OVERVIEW_NAMES else ""
+            out.append(f"{rel} ({plural(count, 'line')})" + (": " + ", ".join(names[:MAX_OVERVIEW_NAMES]) + more if names else ""))
+        if others:
+            folder = clean(os.path.relpath(dirpath, ROOT))
+            shown = ", ".join(others[:8]) + (f", … {len(others) - 8} more" if len(others) > 8 else "")
+            out.append(f"{'' if folder == '.' else folder + '/'} other files: {shown}".strip())
+    if full_up:
+        out.append(f"… (more files not shown, the overview stops after {MAX_OVERVIEW_FILES} – ask for a subfolder)")
+    text = "\n".join(out) or "(no files)"
+    return text[:MAX_OVERVIEW] + ("\n… (shortened – ask for a subfolder)" if len(text) > MAX_OVERVIEW else "")
+
+
 # ---------- changing files (confirmed, backed up, undoable) ----------
 
 journal = []  # changes made in this chat, newest last; used by /undo
@@ -663,6 +757,7 @@ def save_with_backup(full, rel, content=None, source_file=None):
             f.write(content)
     journal.append({"type": "write", "full": full, "rel": rel, "backup": backup})
     remember_file(full)
+    state["changed_in_turn"] = True
     (stats["changed"] if backup else stats["created"]).add(rel)
     note = f" Backup of the old version: {os.path.relpath(backup, ROOT)}" if backup else ""
     ui_break()
@@ -1302,6 +1397,11 @@ def run_command(command, timeout=RUN_TIMEOUT):
     if not confirm("Run?"):
         print()
         return "The user declined. The command was not run."
+    return run_sandboxed(command, timeout)
+
+
+def run_sandboxed(command, timeout):
+    """Runs a command the user agreed to (not a tool: the model cannot call it)."""
     # the backup folder exists before the command runs, so no command can create it (e.g. as a link) in other case
     os.makedirs(os.path.join(ROOT, BACKUP_DIR), exist_ok=True)
     own_tmp = os.path.realpath(tempfile.mkdtemp(prefix="flashcat-run-"))
@@ -1508,7 +1608,7 @@ def web_search(query):
     return "\n".join(results) or "No results (or the search is currently unreachable)."
 
 
-FUNCS = {"list_dir": list_dir, "read_file": read_file, "search": search, "write_file": write_file,
+FUNCS = {"list_dir": list_dir, "project_overview": project_overview, "read_file": read_file, "search": search, "write_file": write_file,
          "edit_file": edit_file, "write_docx": write_docx, "write_pdf": write_pdf, "move_file": move_file,
          "move_files": move_files, "run_command": run_command, "view_image": view_image, "web_search": web_search,
          "fetch_url": fetch_url}
@@ -1518,7 +1618,7 @@ FUNCS = {"list_dir": list_dir, "read_file": read_file, "search": search, "write_
 
 INTERNAL_REPLIES = ("Understood.", "All right, I have the conversation so far in mind.")
 state = {"thinking": False, "context": 32768, "used": 0, "last_answer": "", "tok_s": 0.0, "turn_start": 0.0,
-         "phase": "thinking", "tools_shown": False}
+         "phase": "thinking", "tools_shown": False, "plan": False, "changed_in_turn": False}
 # for the receipt shown when the chat ends
 stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(), "moved": 0, "undone": 0,
          "commands": 0}
@@ -1873,6 +1973,9 @@ def call_model(messages, tools=True, show=True):
                "stream_options": {"include_usage": True}}
     if tools:
         payload["tools"] = TOOLS
+        if state["plan"]:  # only the reading tools, and the instructions say why
+            payload["tools"] = [t for t in TOOLS if t["function"]["name"] in PLAN_TOOLS]
+            payload["messages"] = [{**messages[0], "content": messages[0]["content"] + PLAN_NOTE}] + messages[1:]
     if not state["thinking"] and not state.get("no_reasoning_effort"):
         payload["reasoning_effort"] = "none"
     headers = {"Content-Type": "application/json"}
@@ -1996,10 +2099,18 @@ def spin(done):
 
 # ---------- tool timeline ----------
 
-TOOL_VERBS = {"list_dir": "looks into", "read_file": "reads", "search": "searches", "write_file": "writes",
+TOOL_VERBS = {"list_dir": "looks into", "project_overview": "gets an overview of", "read_file": "reads", "search": "searches", "write_file": "writes",
               "edit_file": "changes", "write_docx": "creates Word document", "write_pdf": "creates PDF",
               "move_file": "moves", "move_files": "moves", "run_command": "runs", "view_image": "looks at",
               "web_search": "searches the web for", "fetch_url": "opens"}
+# plan mode: the model may look, search and read the web (asked as always), but not change or run anything
+PLAN_TOOLS = {"list_dir", "project_overview", "read_file", "search", "view_image", "web_search", "fetch_url"}
+PLAN_NOTE = ("\n\nPLAN MODE is on: the user wants a plan before anything is changed. First read the files "
+             "involved now, with the reading tools (reading is not a step of the plan - do it before you answer). "
+             "Then present a short numbered plan: which files you would change or create, what exactly (name the "
+             "lines or functions), in which order, and how to check the result - and stop. You cannot change, "
+             "create or move files or run commands now. The user switches plan mode off with /plan when you may "
+             "carry it out.")
 INTERACTIVE_TOOLS = {"write_file", "edit_file", "write_docx", "write_pdf", "move_file", "move_files", "run_command"}
 tool_line = {"open": False, "text": ""}
 
@@ -2057,6 +2168,9 @@ def run_tool(call):
     try:
         if name not in FUNCS:
             raise ValueError(f"there is no tool called {name}.")
+        if state["plan"] and name not in PLAN_TOOLS:  # enforced here, whatever the model tries
+            raise ValueError("plan mode is on - nothing is changed or run now. Present your plan; the user "
+                             "switches plan mode off with /plan.")
         if missing:  # say it in the model's terms, so it can repeat the call correctly
             raise ValueError(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing – call {name} "
                              f"again with all of: {', '.join(needed)}.")
@@ -2232,7 +2346,9 @@ def show_context():
             info += f" · {state['tok_s']:.0f} Tok/s"
     print(right_aligned(f"{bar}{info}{RESET}"))
     if pct > 0.7:
-        print(right_aligned(f"{color}context is getting full – /compact frees space{RESET}"))
+        hint = f"it is summarized at {round(AUTO_COMPACT * 100)} % (/compact does it now)" if AUTO_COMPACT > 0 \
+            else "/compact frees space"
+        print(right_aligned(f"{color}context is getting full – {hint}{RESET}"))
     print()
 
 
@@ -2359,21 +2475,57 @@ def receipt():
     print(card(f"{ORANGE}✻{RESET} Session ended", lines))
 
 
-def compact(messages):
+# share of the context at which the chat is summarized by itself (FLASHCAT_AUTOCOMPACT=0 switches it off)
+try:
+    AUTO_COMPACT = min(0.95, float(os.environ.get("FLASHCAT_AUTOCOMPACT") or 0.8))
+except ValueError:
+    AUTO_COMPACT = 0.8
+
+
+def auto_compact(messages, task=""):
+    """Summarizes the chat (in place) when the context is nearly full, so a long chat does not hit the limit.
+    `task` is the question being worked on, when this happens in the middle of an answer."""
+    if AUTO_COMPACT <= 0 or len(messages) < 4 or state["used"] < AUTO_COMPACT * state["context"]:
+        return False
+    ui_break()
+    print(f"  {DIM}◇ context {round(100 * state['used'] / state['context'])} % full – summarizing the chat …{RESET}")
+    phase = state["phase"]
+    new = compact(messages, quiet=True, task=task)
+    state["phase"] = phase
+    if new is messages:
+        return False
+    if task:
+        new.append({"role": "user", "content": "(The chat was summarized because the context was full. Continue "
+                                               f"this task where you left off: {task})"})
+    messages[:] = new
+    return True
+
+
+def compact(messages, quiet=False, task=""):
     if len(messages) < 3:
         print("Nothing to summarize yet.\n")
         return messages
     request = without_images(messages) + [{"role": "user", "content": (
         "Summarize our conversation so far for yourself so we can continue with less context. "
         "Keep all important facts, file names, results, decisions and open tasks. "
+        "Say which files you already read or changed and what matters in them (names of functions, key values). "
+        + ("You are in the middle of a task: also keep what you already did and found out for it with the tools "
+           "(the parts of file contents and command results that matter) and what is still to do. " if task else "") +
         "Only the summary, as bullet points, in the language of the conversation.")}]
-    print(f"{DIM}  summarizing the chat …{RESET}")
+    if not quiet:
+        print(f"{DIM}  summarizing the chat …{RESET}")
     summary = call_model(request, tools=False, show=False)["content"].strip()
+    if not summary:  # better a full chat than an empty one
+        if not quiet:
+            print("The model returned no summary – the chat stays as it is.\n")
+        return messages
     new = [messages[0],
-           {"role": "user", "content": "Summary of our conversation so far:\n" + summary},
+           {"role": "user", "content": "Summary of our conversation so far (your own notes: everything in it "
+                                       "happened in this chat, including the files you read):\n" + summary},
            {"role": "assistant", "content": INTERNAL_REPLIES[1]}]
-    print(f"{DIM}{summary}{RESET}\n")
-    print(f"Chat summarized ({len(messages) - 1} → 2 messages).\n")
+    if not quiet:
+        print(f"{DIM}{summary}{RESET}\n")
+        print(f"Chat summarized ({len(messages) - 1} → 2 messages).\n")
     state["used"] = 0
     return new
 
@@ -2385,7 +2537,7 @@ def read_input():
     # orange ❯ like Claude (macOS' libedit moves marked-invisible color codes, so they are left unmarked)
     watcher = PasteWatcher()
     try:
-        first = input(f"{ORANGE}❯{RESET} ")
+        first = input((f"{BLUE}plan{RESET} " if state["plan"] else "") + f"{ORANGE}❯{RESET} ")
     finally:
         watcher.stop()
     if first.strip() == '"""':
@@ -2404,15 +2556,231 @@ def read_input():
 
 
 COMMANDS = ["/help", "/undo", "/copy", "/save", "/export", "/paste", "/remember", "/resume", "/clear", "/compact",
-            "/context", "/think", "/exit"]
-COMMAND_ALIASES = {"/?": "/help", "/quit": "/exit"}
+            "/context", "/think", "/plan", "/model", "/test", "/command", "/exit"]
+COMMAND_ALIASES = {"/?": "/help", "/quit": "/exit", "/commands": "/command", "/models": "/model"}
+
+# ---------- your own commands: ~/.flashcat/commands/<name>.md, used as /<name> ----------
+
+COMMAND_DIR = os.path.join(HOME_DIR, "commands")
+COMMAND_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")
+
+
+def custom_commands():
+    """{name: prompt text} of the user's own commands. They live in ~/.flashcat only (not in the start folder,
+    which may come from someone else); the names of built-in commands cannot be taken."""
+    found = {}
+    try:
+        names = sorted(os.listdir(COMMAND_DIR))
+    except OSError:
+        return found
+    for file in names:
+        name, ext = os.path.splitext(file)
+        if ext != ".md" or not COMMAND_NAME.fullmatch(name) or "/" + name in COMMANDS or "/" + name in COMMAND_ALIASES:
+            continue
+        try:
+            with open(os.path.join(COMMAND_DIR, file), encoding="utf-8", errors="replace") as f:
+                text = f.read(20_000).strip()
+        except OSError:
+            continue
+        if text:
+            found[name] = text
+    return found
+
+
+def expand_custom(user):
+    """The prompt of the user's own command `user` starts with (text after the name replaces $ARGS, or is added at
+    the end), or None."""
+    cmd, _, arg = user.partition(" ")
+    text = custom_commands().get(cmd[1:].lower())
+    if text is None:
+        return None
+    arg = arg.strip()
+    return text.replace("$ARGS", arg) if "$ARGS" in text else text + (f"\n\n{arg}" if arg else "")
+
+
+def command_command(arg):
+    """/command: lists the user's own commands, or saves a new one (/command name prompt text)."""
+    name, _, text = arg.partition(" ")
+    name, text = name.lstrip("/").lower(), text.strip()
+    if not name:
+        mine = custom_commands()
+        rows = [f"{ORANGE}/{n:<14}{RESET}{clean(t.splitlines()[0])[:70]}" for n, t in mine.items()]
+        print(card(f"{ORANGE}✻{RESET} Your commands", rows or [f"{DIM}(none yet){RESET}"]))
+        print(f"{DIM}  new: /command name prompt text ($ARGS stands for what you type after /name)\n"
+              f"  or put name.md into ~/.flashcat/commands/ · remove one by deleting its file{RESET}\n")
+        return
+    if not COMMAND_NAME.fullmatch(name) or "/" + name in COMMANDS or "/" + name in COMMAND_ALIASES:
+        print("That name is not possible (lower-case letters, digits and -; not the name of a built-in command).\n")
+        return
+    if not text:
+        print(f"What should /{name} ask? Example: /command {name} Explain this file for a beginner: $ARGS\n")
+        return
+    path = os.path.join(COMMAND_DIR, name + ".md")
+    if os.path.exists(path) and not confirm(f"/{name} exists already. Replace it?"):
+        print()
+        return
+    os.makedirs(COMMAND_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    print(f"  {GREEN}✓{RESET} {DIM}/{name} saved in ~/.flashcat/commands/{name}.md{RESET}\n")
+
+
+# ---------- /test: a test command that runs by itself after changes ----------
+
+TEST_FILE = os.path.join(HOME_DIR, "test-commands.json")
+TEST_TIMEOUT, MAX_TEST_ROUNDS = 300, 3
+
+
+def test_commands():
+    try:
+        with open(TEST_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def test_command():
+    """The test command the user set for this folder, or "". Kept in ~/.flashcat (not in the folder, where a
+    downloaded project or a command could change it)."""
+    cmd = test_commands().get(ROOT)
+    return cmd if isinstance(cmd, str) else ""
+
+
+def run_tests(command):
+    """Runs the user's test command in the sandbox, without asking (the user set it). Returns (passed, result)."""
+    ui_break()
+    print()
+    print(card(f"{ORANGE}runs your test command{RESET}", [f"{BOLD}{clean(command)}{RESET}",
+               f"{DIM}set with /test · sandbox: no internet · writes only in this folder{RESET}"]))
+    result = run_sandboxed(command, TEST_TIMEOUT)
+    return result.startswith("Exit code: 0") and "(stopped after" not in result.splitlines()[0], result
+
+
+def test_command_command(arg):
+    """/test: shows, sets (/test <command>), removes (/test off) or runs (/test run) the folder's test command."""
+    data, current = test_commands(), test_command()
+    if arg.lower() in ("", "run"):
+        if not current:
+            print("No test command is set for this folder. Set one with e.g.: /test python3 -m unittest\n"
+                  f"{DIM}  It then runs by itself (in the sandbox) whenever Flashcat changed files, and failures go "
+                  f"back to the model.{RESET}\n")
+        elif arg:
+            run_tests(current)
+            print()
+        else:
+            print(f"Test command for this folder: {BOLD}{clean(current)}{RESET}\n"
+                  f"{DIM}  runs after changes · /test run runs it now · /test off removes it{RESET}\n")
+        return
+    if arg.lower() == "off":
+        data.pop(ROOT, None)
+    elif len(arg) > MAX_COMMAND:
+        print(f"The command is longer than {MAX_COMMAND} characters.\n")
+        return
+    else:
+        data[ROOT] = arg
+    os.makedirs(HOME_DIR, exist_ok=True)
+    with open(TEST_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+    print(f"  {GREEN}✓{RESET} {DIM}" + ("no test command for this folder any more" if arg.lower() == "off" else
+                                         "runs after every change Flashcat makes here (in the sandbox, without asking)")
+          + f"{RESET}\n")
+
+
+# ---------- /model: another model without leaving the chat ----------
+
+LMS = os.path.join(HOME, ".lmstudio", "bin", "lms")
+ACTIVE_DIR = os.path.join(HOME_DIR, "active")  # the launcher's notes: open windows, models Flashcat loaded
+
+
+def lms(*args, timeout=600):
+    return subprocess.run([LMS, *args], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+
+
+def installed_models():
+    try:
+        return [m["modelKey"] for m in json.loads(lms("ls", "--llm", "--json", timeout=30).stdout)]
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return []
+
+
+def other_windows():
+    """True if another Flashcat window is open (its launcher is noted in ~/.flashcat/active and still runs)."""
+    try:
+        names = os.listdir(ACTIVE_DIR)
+    except OSError:
+        return False
+    for name in names:
+        pid = name.rpartition(".")[2]
+        if name.startswith("session.") and pid.isdigit() and int(pid) != os.getppid():
+            try:
+                os.kill(int(pid), 0)
+                return True
+            except OSError:
+                pass
+    return False
+
+
+def loaded_by_flashcat():
+    try:
+        with open(os.path.join(ACTIVE_DIR, "loaded"), encoding="utf-8") as f:
+            return f.read().split()
+    except OSError:
+        return []
+
+
+def switch_model(want):
+    """/model: lists the installed models, or loads another one for this chat (the chat itself stays)."""
+    global MODEL, MODEL_NAME
+    if BACKEND != "lmstudio":
+        print("Changing the model inside the chat works with LM Studio only. With Ollama: /exit, then\n"
+              "flashcat --continue --model <name>\n")
+        return
+    keys = installed_models()
+    if not want:
+        for k in keys:
+            print(f"  {ORANGE + '●' + RESET if k == MODEL else ' '} {clean(k)}")
+        print(f"{DIM}  /model <name> switches (part of the name is enough){RESET}\n")
+        return
+    hits = [k for k in keys if k.lower() == want.lower()] or [k for k in keys if want.lower() in k.lower()]
+    if len(hits) != 1:
+        print(f"No unique model matches '{clean(want)}'. /model lists the installed ones.\n")
+        return
+    new, old = hits[0], MODEL
+    if new == old:
+        print(f"{clean(new)} is the current model already.\n")
+        return
+    # memory: two large models rarely fit, so the old one goes first - unless Flashcat did not load it (it was
+    # loaded in LM Studio before) or another window still uses it
+    unload = old in loaded_by_flashcat() and not other_windows()
+    print(f"  {DIM}loading {clean(new)} …{RESET}", flush=True)
+    if unload:
+        lms("unload", old)
+    context = os.environ.get("FLASHCAT_CONTEXT") or str(state["context"])
+    try:
+        ok = lms("load", new, "--context-length", context, "--parallel", "1", "-y").returncode == 0
+    except subprocess.SubprocessError:
+        ok = False
+    if not ok:
+        if unload:
+            lms("load", old, "--context-length", context, "--parallel", "1", "-y")
+        print(f"  {RED}✗{RESET} {clean(new)} could not be loaded – staying with {clean(old)}.\n")
+        return
+    os.makedirs(ACTIVE_DIR, exist_ok=True)
+    noted = [m for m in loaded_by_flashcat() if not (unload and m == old)]
+    with open(os.path.join(ACTIVE_DIR, "loaded"), "w", encoding="utf-8") as f:  # the cleanup unloads these
+        f.write("".join(m + "\n" for m in noted + ([new] if new not in noted else [])))
+    MODEL = MODEL_NAME = new
+    state.update(context=loaded_context_length(), no_reasoning_effort=False)
+    kept = "" if unload else f" · {clean(old)} stays loaded"
+    print(f"  {GREEN}✓{RESET} {DIM}now using {pretty_model()} · {round(state['context'] / 1024)}k context{kept}{RESET}\n")
 
 
 def complete(text, i):
     """Tab completion: /commands and @file names (relative to the start folder)."""
     options = []
     if text.startswith("/"):
-        options = [c for c in COMMANDS if c.startswith(text.lower())]
+        options = [c for c in COMMANDS + ["/" + n for n in custom_commands()] if c.startswith(text.lower())]
     elif text.startswith("@"):
         partial = text[1:].strip('"')
         folder, prefix = os.path.split(partial)
@@ -2792,6 +3160,10 @@ HELP_COMMANDS = [
     ("/compact", "summarize the chat", "frees context"),
     ("/context", "context usage", ""),
     ("/think", "think thoroughly on/off", "slower"),
+    ("/plan", "plan first, change nothing", "/plan again switches it off"),
+    ("/model", "installed models", "/model qwen switches"),
+    ("/test", "test command after changes", "/test python3 -m unittest"),
+    ("/command", "your own commands", "/command name prompt text"),
     ("/exit", "quit", "continue with flashcat --continue"),
     ("Esc", "cancel the answer", ""),
 ]
@@ -2821,7 +3193,10 @@ def show_help():
         return [f"{ORANGE}{key:<{key_width}}{RESET}" + (f"{text:<{text_width}}{DIM}{extra}{RESET}" if show_extra else text)
                 for key, text, extra in entries]
 
-    lines = card(f"{ORANGE}✻{RESET} Commands", rows(HELP_COMMANDS) + ["", f"{DIM}Tips{RESET}"] + rows(HELP_TIPS)).split("\n")
+    mine = [("/" + n, clean(t.splitlines()[0])[:text_width - 3], "") for n, t in custom_commands().items()]
+    key_width = max([key_width] + [len(key) + 2 for key, _, _ in mine])
+    lines = card(f"{ORANGE}✻{RESET} Commands", rows(HELP_COMMANDS) + (["", f"{DIM}Yours{RESET}"] + rows(mine) if mine else [])
+                 + ["", f"{DIM}Tips{RESET}"] + rows(HELP_TIPS)).split("\n")
     # a small cat sitting below the right end of the card
     pad = " " * max(0, visible_len(lines[0]) - 10)
     lines += [f"{pad}{DIM} /\\_/\\{RESET}", f"{pad}{DIM}({RESET} {ORANGE}o.o{RESET} {DIM}){RESET}", f"{pad}{DIM} > ^ <{RESET}"]
@@ -2840,7 +3215,8 @@ def chat_markdown(messages):
             content = " ".join(p.get("text", "") for p in content if p.get("type") == "text")
         content = (content or "").strip()
         if m.get("role") == "user":
-            if content.startswith(("(Info:", "(Please answer", "(Image from view_image")) or \
+            if content.startswith(("(Info:", "(Please answer", "(Image from view_image", "(The chat was summarized",
+                                   "(Automatic test run")) or \
                     content.startswith("Summary of our conversation"):
                 continue
             content = re.sub(r"\n\n--- File: (.+?) ---\n.*?\n--- End of \1 ---", r"\n\n📎 \1", content, flags=re.S)
@@ -2931,6 +3307,24 @@ def handle_command(user, messages):
     elif cmd == "/compact":
         messages = compact(messages)
         save_session(messages)
+    elif cmd == "/plan":
+        state["plan"] = not state["plan"]
+        if state["plan"]:
+            print(f"Plan mode is ON: {NAME} only looks and presents a plan – nothing is changed or run.\n"
+                  f"{DIM}  /plan again switches it off, then say e.g. \"go ahead\".{RESET}\n")
+        else:
+            if len(messages) > 1:
+                messages += [{"role": "user", "content": "(Info: plan mode is off now. As soon as I tell you to "
+                                                         "go ahead, carry out the plan with the writing tools "
+                                                         "right away - do not ask again, the tools ask me.)"},
+                             {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+            print(f"Plan mode is OFF: changes are possible again (each one asks first).\n")
+    elif cmd == "/model":
+        switch_model(arg)
+    elif cmd == "/test":
+        test_command_command(arg)
+    elif cmd == "/command":
+        command_command(arg)
     elif cmd == "/undo" and arg.lower() in ("list", "ls"):
         show_journal()
     elif cmd == "/undo":
@@ -3056,7 +3450,10 @@ def chat_loop(messages):
             blink_stop.set()
         if not user:
             continue
-        if user.startswith("/"):
+        own = expand_custom(user) if user.startswith("/") else None
+        if own is not None:
+            user = own  # one of the user's own commands: its text is the question
+        elif user.startswith("/"):
             try:
                 messages = handle_command(user, messages)
             except Exception as e:
@@ -3085,10 +3482,11 @@ def chat_loop(messages):
 def run_turn(messages, user, show=True, attachment=""):
     """One question: sends it, runs the tools the model calls and appends everything to `messages`. `attachment`
     (piped input) is added as it is: @file and 📎 in it are not resolved - only the user's own words are."""
-    state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False)
+    state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False, changed_in_turn=False)
     stats["questions"] += 1
     if show:
         print()
+    auto_compact(messages)
     content = attach_mentions(user)
     if attachment:
         if isinstance(content, list):
@@ -3096,9 +3494,13 @@ def run_turn(messages, user, show=True, attachment=""):
         else:
             content += attachment
     messages.append({"role": "user", "content": content})
-    nudged = False
+    nudged, test_rounds, compacted = False, 0, False
     for step in range(15):
         state["phase"] = "thinking" if step == 0 else "working"
+        if step and not compacted:
+            # once per question: a tool result too large for the context would otherwise be summarized, fetched
+            # again and summarized again
+            compacted = auto_compact(messages, task=user)
         msg = call_model(messages, show=show)
         if "tool_calls" not in msg and not msg["content"].strip() and not nudged:
             nudged = True  # empty reply: ask once more instead of showing nothing
@@ -3108,6 +3510,17 @@ def run_turn(messages, user, show=True, attachment=""):
         if msg["content"].strip():
             state["last_answer"] = msg["content"].strip()
         if "tool_calls" not in msg:
+            # the model thinks it is done: if it changed files, the user's test command decides
+            if state["changed_in_turn"] and test_rounds < MAX_TEST_ROUNDS and test_command():
+                state["changed_in_turn"] = False
+                test_rounds += 1
+                passed, result = run_tests(test_command())
+                if not passed:
+                    messages.append({"role": "user", "content":
+                                     f"(Automatic test run after your changes: `{test_command()}` failed. Find the "
+                                     f"cause, fix it, and it runs again.)\n{result}"})
+                    state["tools_shown"] = True
+                    continue
             break
         for c in msg["tool_calls"]:
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(c)})

@@ -36,7 +36,8 @@ Flashcat $(/usr/bin/python3 $CHAT --version | cut -d' ' -f2) – a local AI assi
       --update                install the newest release
       --version               show the version
 
-Settings: FLASHCAT_BACKEND=lmstudio|ollama, FLASHCAT_CONTEXT=<tokens>, FLASHCAT_API_KEY=<key>
+Settings: FLASHCAT_BACKEND=lmstudio|ollama, FLASHCAT_CONTEXT=<tokens>, FLASHCAT_AUTOCOMPACT=<0–0.95>,
+          FLASHCAT_API_KEY=<key>
 Inside the chat, /help lists the commands.
 EOF
 }

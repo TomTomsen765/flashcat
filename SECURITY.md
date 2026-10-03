@@ -35,6 +35,8 @@ own code, whatever the model asks for.
   somewhere else, and which gets its own `.gitignore`.
 
 **Commands**
+- In plan mode (`/plan`) the model is offered the reading tools only, and the code refuses every tool
+  that changes or runs something – without asking you, whatever the model calls.
 - `run_command` shows the full command and runs only after your `Y`. Commands that can delete or
   overwrite files are marked in red.
 - It runs in a macOS sandbox (`sandbox-exec`) that Flashcat builds for the start folder. The sandbox
@@ -58,6 +60,12 @@ own code, whatever the model asks for.
   after 2 minutes (the model can ask for up to 10).
 - Nothing keeps running afterwards: when the command ends, everything it started is stopped – also
   processes that detached themselves (Flashcat finds them by a mark in their environment).
+- The one command that runs without a question is the test command you set yourself with
+  `/test <command>`: after Flashcat changed files it runs in the same sandbox (shown in a card), and
+  its output goes back to the model, at most three times per question. It is stored per folder in
+  `~/.flashcat/test-commands.json` – outside the start folder, where neither a downloaded project nor
+  the model's tools nor a sandboxed command can write. What it runs (your test files) can of course
+  have been changed by the model, with your confirmation.
 - git can run programs by itself (hooks, and settings like `core.fsmonitor`, `core.pager` or
   `alias.x = !…`) – the next time *you* use git, outside the sandbox. So after every command Flashcat
   compares the git hooks and settings of the repositories in the folder: new hooks and settings that
@@ -75,6 +83,11 @@ own code, whatever the model asks for.
   terminal, so a file name or address cannot be disguised.
 
 **Instructions**
+- Your own commands (`/name`) come from `~/.flashcat/commands/` only, never from the start folder,
+  and cannot replace built-in commands.
+- When the context is nearly full, the chat is summarized by the model itself (also with `/compact`).
+  The summary replaces the earlier messages; text from a document or web page read before can end up
+  in it like in any answer. Confirmations stay as they are.
 - A `FLASHCAT.md` in the start folder could come from someone else. It is shown and only used after
   you allow it; Flashcat remembers its checksum and asks again when it changes. Links pointing
   outside the folder are ignored.
