@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.3.12"
+VERSION = "1.3.13"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -963,6 +963,10 @@ def undo():
         return None
     e = journal[-1]
     desc = describe(e)
+    if not valid_journal_entry(e):
+        # e.g. a command replaced the file by a link since: undoing would write to the place it points to
+        print("Not possible: a file or folder of this change now leads outside the start folder (a link).\n")
+        return None
     if not confirm(f"Undo: {desc}?"):
         print()
         return None
@@ -1030,7 +1034,9 @@ def sandbox_profile(own_tmp):
     """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and the
     command's own temporary folder `own_tmp`, no reading of user files outside the start folder (home folders, other
     users, external drives, other apps' temporary files - system files and developer tools stay readable), private
-    data and key files blocked like for the other tools, no opening apps or URLs, no clipboard, no keychain."""
+    data and key files blocked like for the other tools, no opening apps or URLs, no clipboard, no keychain, no
+    settings of apps (macOS writes them on a program's behalf, outside the folder), no Shortcuts, no signals to
+    other programs, no reading or writing of terminal windows."""
     home, root = HOME, ROOT
     private = f'(regex #"^{sb_regex(home)}/\\.") (subpath {sb_string(os.path.join(home, "Library"))})'
     top = os.path.relpath(root, home).split(os.sep)[0] if inside(root.lower(), home.lower()) else ""
@@ -1047,7 +1053,16 @@ def sandbox_profile(own_tmp):
         '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") '
         '(global-name "com.apple.coreservices.quarantine-resolver") (global-name "com.apple.pasteboard.1") '
         '(global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc") '
-        '(global-name "com.apple.secd") (global-name-regex #"^com\\.apple\\.nsurlsessiond"))',
+        '(global-name "com.apple.secd") (global-name-regex #"^com\\.apple\\.nsurlsessiond") '
+        # the Shortcuts app would run the user's shortcuts outside the sandbox
+        '(global-name-regex #"^com\\.apple\\.siri\\."))',
+        # app settings (defaults write): the settings service writes them in ~/Library for the command, and some
+        # start programs (e.g. a terminal's startup command). Only the system-wide ones (language, …) stay readable.
+        "(deny user-preference-read user-preference-write)",
+        '(allow user-preference-read (preference-domain "kCFPreferencesAnyApplication"))',
+        # signals only to the command's own processes, not to the user's other programs
+        "(deny signal)",
+        "(allow signal (target same-sandbox))",
         # reading: no user files except the start folder and developer tools; no temporary folders of other apps
         # (they can hold private data: images, documents, caches). Later rules win, so the order matters.
         f"(deny file-read-data (subpath {sb_string(home)}) (subpath \"/Users\") (subpath \"/Volumes\") "
@@ -1058,7 +1073,10 @@ def sandbox_profile(own_tmp):
         # writing: only the start folder and the command's own temporary folder, never private data or the backups
         "(deny file-write*)",
         f"(allow file-write* (subpath {sb_string(root)}) "
-        + ' (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+        + ' (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (regex #"^/dev/fd/"))',
+        # terminal windows (this one and others): text written there would bypass Flashcat's cleaning of control
+        # characters and could fake a question; reading there would take the user's keystrokes
+        '(deny file-read-data (regex #"^/dev/(tty|pty)[^/]+"))',
         f"(allow file-read-data file-write* (subpath {sb_string(own_tmp)}) "
         # caches of Apple's developer tools (xcrun, compilers) - tool paths and compiled modules, nothing private
         '(regex #"^/private/var/folders/[^/]+/[^/]+/T/xcrun_db(-|$)") '
@@ -1114,14 +1132,24 @@ MAX_GIT_DEPTH = 3
 
 
 def git_dirs():
-    """The .git folders of the repositories in the start folder (the start folder's own, and subfolders up to
-    MAX_GIT_DEPTH levels deep)."""
+    """The git folders of the repositories in the start folder (the start folder's own, and subfolders up to
+    MAX_GIT_DEPTH levels deep): a folder called .git, or the folder a .git file points to ("gitdir: …")."""
     found = []
-    for dirpath, dirnames, _ in os.walk(ROOT):
+    for dirpath, dirnames, filenames in os.walk(ROOT):
         depth = dirpath[len(ROOT):].count(os.sep)
         for d in dirnames:
             if d.lower() == ".git" and os.path.isdir(os.path.join(dirpath, d)):
                 found.append(os.path.join(dirpath, d))
+        for name in filenames:
+            if name.lower() == ".git":
+                try:
+                    with open(os.path.join(dirpath, name), encoding="utf-8", errors="replace") as f:
+                        pointer = re.match(r"gitdir:\s*(.+)", f.read(4096))
+                except OSError:
+                    continue
+                target = os.path.realpath(os.path.join(dirpath, pointer.group(1).strip())) if pointer else ""
+                if target and os.path.isdir(target) and inside(target, ROOT) and target not in found:
+                    found.append(target)
         dirnames[:] = [] if depth >= MAX_GIT_DEPTH else \
             [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d))]
     return found
@@ -1155,10 +1183,10 @@ def git_config_entries(text):
     entries, section = set(), ""
     for line in text.splitlines():
         line = line.strip()
-        head = re.match(r'\[\s*([^\s\]"]+)(?:\s+"(.*)")?\s*\]', line)
+        head = re.match(r'\[\s*([^\s\]"]+)(?:\s+"(.*?)")?\s*\]', line)
         if head:
             section = head.group(1).lower() + (f".{head.group(2)}" if head.group(2) is not None else "")
-            continue
+            line = line[head.end():].strip()  # git also accepts a setting on the same line: [core] fsmonitor = x
         kv = re.match(r"([A-Za-z][\w-]*)\s*(?:=\s*(.*))?$", line)
         if kv and section:
             entries.add((f"{section}.{kv.group(1).lower()}", (kv.group(2) or "").strip()))
@@ -1200,11 +1228,13 @@ def restore_git_setting(p, old, risky_lines):
     out, section = [], ""
     with open(p, encoding="utf-8", errors="replace") as f:
         for line in f.read().splitlines():
-            head = re.match(r'\s*\[\s*([^\s\]"]+)(?:\s+"(.*)")?\s*\]', line)
-            key = re.match(r"\s*([A-Za-z][\w-]*)\s*(=|$)", line)
+            head = re.match(r'\s*\[\s*([^\s\]"]+)(?:\s+"(.*?)")?\s*\]', line)
             if head:
                 section = head.group(1).lower() + (f".{head.group(2)}" if head.group(2) is not None else "")
-            elif key and f"{section}.{key.group(1).lower()}" in bad:
+            key = re.match(r"\s*([A-Za-z][\w-]*)\s*(=|$)", line[head.end():] if head else line)
+            if key and f"{section}.{key.group(1).lower()}" in bad:
+                if head:  # the setting stood on the section's own line: keep the section
+                    out.append(line[:head.end()])
                 continue
             out.append(line)
     with open(p, "w", encoding="utf-8") as f:
@@ -2838,7 +2868,7 @@ def save_text(name, text, default):
         return
     base, ext = os.path.splitext(full)
     n = 2
-    while os.path.exists(full):
+    while os.path.lexists(full):  # also a link that leads nowhere yet: writing would create its target
         full, n = f"{base}-{n}{ext}", n + 1
     save_with_backup(full, os.path.relpath(full, ROOT), text)
     print()

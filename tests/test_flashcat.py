@@ -10,6 +10,8 @@ import importlib.util
 import io
 import json
 import os
+import pty
+import select
 import shutil
 import subprocess
 import sys
@@ -196,6 +198,25 @@ class ChangeTest(FlashcatTest):
         self.answers = ["y"]
         self.chat.undo()
         self.assertEqual(self.read("notes.txt"), "hello\nworld\n")
+
+    def test_undo_does_not_write_through_a_link_that_appeared_since(self):
+        self.answers = ["y"]
+        self.chat.edit_file("notes.txt", "world", "cat")
+        target = os.path.join(self.outside, "secret.txt")
+        os.remove(os.path.join(self.project, "notes.txt"))
+        os.symlink(target, os.path.join(self.project, "notes.txt"))  # e.g. made by a command
+        self.answers = ["y"]
+        self.assertIsNone(self.chat.undo())
+        with open(target) as f:
+            self.assertEqual(f.read(), "outside\n")
+
+    def test_saving_an_answer_skips_a_link_that_leads_outside(self):
+        target = os.path.join(self.outside, "new.md")
+        self.write(os.path.join(self.project, "answer.md"), "old\n")
+        os.symlink(target, os.path.join(self.project, "answer-2.md"))
+        self.chat.save_text("answer.md", "text\n", "answer.md")
+        self.assertFalse(os.path.exists(target))
+        self.assertEqual(self.read("answer-3.md"), "text\n")
 
     def test_hard_link_is_refused(self):
         os.link(os.path.join(self.outside, "secret.txt"), os.path.join(self.project, "hard.txt"))
@@ -405,6 +426,56 @@ class CommandTest(FlashcatTest):
             config = f.read()
         self.assertNotIn("fsmonitor", config)
         self.assertIn("Flash", config)
+
+    def test_git_setting_on_the_section_line_is_undone(self):
+        self.answers = ["y"]
+        self.chat.run_command("git init -q .", timeout=30)
+        self.answers = ["y", "n"]
+        result = self.chat.run_command("printf '[core] fsmonitor = ./evil.sh\\n[user] name = Flash\\n' >> .git/config",
+                                       timeout=30)
+        self.assertIn("undone", result)
+        with open(os.path.join(self.project, ".git", "config")) as f:
+            self.assertNotIn("fsmonitor", f.read())
+
+    def test_git_folder_behind_a_git_file_is_checked(self):
+        self.answers = ["y"]
+        self.chat.run_command("git init -q .", timeout=30)
+        self.answers = ["y", "n"]
+        result = self.chat.run_command("mv .git .g && echo 'gitdir: .g' > .git && git config core.fsmonitor ./evil.sh "
+                                       "&& printf '#!/bin/sh\\necho evil' > .g/hooks/pre-commit", timeout=30)
+        self.assertIn("undone", result)
+        self.assertFalse(os.path.exists(os.path.join(self.project, ".g", "hooks", "pre-commit")))
+        with open(os.path.join(self.project, ".g", "config")) as f:
+            self.assertNotIn("fsmonitor", f.read())
+
+    def test_cannot_change_or_read_app_settings(self):
+        domain = "com.flashcat.test-probe"
+        self.addCleanup(subprocess.run, ["defaults", "delete", domain], capture_output=True)
+        result = self.run_cmd(f"defaults write {domain} probe -string hello; defaults read com.apple.finder && echo READ")
+        self.assertNotIn("READ", result)
+        self.assertNotEqual(subprocess.run(["defaults", "read", domain], capture_output=True).returncode, 0)
+
+    def test_cannot_stop_other_programs(self):
+        other = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(other.kill)
+        result = self.run_cmd(f"kill -9 {other.pid}; sleep 20 & kill $! && echo OWN CHILD STOPPED")
+        time.sleep(0.3)
+        self.assertIsNone(other.poll())
+        self.assertIn("OWN CHILD STOPPED", result)
+
+    def test_cannot_write_to_or_read_from_terminal_windows(self):
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        name = os.ttyname(slave)
+        os.write(master, b"typed by the user\n")
+        result = self.run_cmd(f"printf 'FAKE QUESTION' > {name}; head -1 < {name}")
+        self.assertNotIn("typed", result)
+        shown = os.read(master, 1000) if select.select([master], [], [], 0.5)[0] else b""  # the echo of the typing
+        self.assertNotIn(b"FAKE", shown)
+
+    def test_cannot_run_shortcuts(self):
+        self.assertNotIn("REACHED", self.run_cmd("shortcuts list >/dev/null 2>&1 && echo REACHED"))
 
     def test_new_repository_keeps_safe_settings_only(self):
         self.answers = ["y", "n"]

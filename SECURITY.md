@@ -48,6 +48,12 @@ own code, whatever the model asks for.
   - private data (`~/.*`, `~/Library`) and key files stay locked, even when you unlocked them for the
     file tools in this chat
   - no opening of apps or web pages (Launch Services, Apple Events), no clipboard, no keychain
+  - no settings of apps: `defaults write` is refused (macOS would write them in `~/Library` on the
+    command's behalf, and some settings start programs), and only the system-wide settings
+    (language, …) can be read
+  - no Shortcuts (they would run outside the sandbox), no signals to programs other than its own
+  - no writing to or reading from terminal windows (text written there would bypass Flashcat's
+    cleaning of control characters and could fake a question)
 - No input (stdin is empty), the API key is removed from the environment, and the command is stopped
   after 2 minutes (the model can ask for up to 10).
 - Nothing keeps running afterwards: when the command ends, everything it started is stopped – also
@@ -56,7 +62,8 @@ own code, whatever the model asks for.
   `alias.x = !…`) – the next time *you* use git, outside the sandbox. So after every command Flashcat
   compares the git hooks and settings of the repositories in the folder: new hooks and settings that
   can run programs are shown in red and undone unless you keep them. Normal changes (`git init`,
-  `user.name`, remotes, branches) pass without a question.
+  `user.name`, remotes, branches) pass without a question. A git folder behind a `.git` file
+  (`gitdir: …`) is checked too.
 
 **Internet**
 - Every web search and page fetch needs your `Y` – before any network traffic, including the DNS
@@ -105,6 +112,9 @@ own code, whatever the model asks for.
   access to private data, it happens. Read what the prompt shows before you answer `Y`.
 - A command you allowed can delete or change anything **inside the start folder** (e.g. `rm -rf .`),
   and `/undo` cannot bring that back. Use git or a backup for folders you care about.
+- The sandbox starts from "allowed" and blocks what is known to lead outside (network, files, apps,
+  settings, Shortcuts, …). macOS has many system services; one that is not on the list and acts for
+  the command could be another way out. Reports of such a way are very welcome.
 - A command can also change files that *other* programs later run outside the sandbox – for example
   a `Makefile`, `package.json` scripts or a build script. Flashcat guards git's own hooks and settings
   (see above), not these. Look at what a command changed before you run the project yourself.

@@ -199,7 +199,8 @@ locked.** Details: [SECURITY.md](SECURITY.md).
 - The macOS sandbox enforces the rules, whatever the command does: **no internet** (not even name
   lookups), **writing only inside the start folder** (never its backups), no reading of your other files,
   other apps' temporary files, private data and key files, no opening apps or web pages, no clipboard,
-  no keychain. Commands are stopped after 2 minutes (at most 10), cannot ask for input, and nothing they
+  no keychain, no changing other apps' settings, no Shortcuts, no stopping other programs, no writing
+  into terminal windows. Commands are stopped after 2 minutes (at most 10), cannot ask for input, and nothing they
   started keeps running afterwards.
 - If a command adds git hooks or git settings that would run programs the next time you use git
   (outside the sandbox), Flashcat shows them in red and undoes them unless you keep them.
@@ -208,7 +209,8 @@ locked.** Details: [SECURITY.md](SECURITY.md).
 - You see a preview of every new file and every change before you answer `Y`. Long previews are
   shortened – answer `A` to see everything first.
 - The old version is backed up in `.flashcat-backup/` (kept out of git automatically); `/undo`
-  reverts the last change. Flashcat itself cannot change or remove the backups.
+  reverts the last change (and refuses if the file was replaced by a link that leads outside the
+  folder since). Flashcat itself cannot change or remove the backups.
 
 **Every internet access asks first**
 - Web searches and web pages are only fetched after your `Y` – nothing leaves your Mac before that,
