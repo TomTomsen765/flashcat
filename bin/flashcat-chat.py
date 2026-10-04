@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -150,7 +150,8 @@ TOOLS = [
             "more": {"type": "array", "items": {"type": "string"},
                      "description": "Other words the text could use for the same thing: synonyms, other word forms "
                                     "(e.g. cancel, cancellation, terminate, notice period), and the words in the "
-                                    "language of the documents. Files that contain most of them come first."},
+                                    "language of the documents. Other forms of a word are found by themselves "
+                                    "(Frist also finds Fristen). Files that contain most of the words come first."},
             "path": {"type": "string", "description": "Relative start folder, default '.'"}},
             "required": ["pattern"]}}},
     {"type": "function", "function": {
@@ -573,6 +574,16 @@ def read_file(path):
 
 
 MAX_TERMS, MAX_RAW_HITS = 12, 2000
+MIN_STEM = 5  # letters two words must share at the start to count as forms of one word
+
+
+def same_word(a, b):
+    """True if `a` and `b` look like forms of one word: they start alike for at least MIN_STEM letters and for
+    three quarters of the shorter one (Frist / Fristen, kündigen / Kündigung, cancel / cancellation, Vertrag /
+    Vertragsnummer) - no grammar of any language needed."""
+    a, b = a.lower(), b.lower()
+    shared = len(os.path.commonprefix([a, b]))
+    return shared >= MIN_STEM and shared >= 0.75 * min(len(a), len(b))
 
 
 def search(pattern, path=".", more=None):
@@ -580,7 +591,7 @@ def search(pattern, path=".", more=None):
     most different ones come first - a cheap way to find a topic whose wording is not known."""
     terms = [str(pattern)] + [str(t)[:100] for t in ([more] if isinstance(more, str) else more or []) if str(t).strip()]
     terms = list(dict.fromkeys(terms))[:MAX_TERMS]
-    rxs = []
+    rxs, forms = [], {}
     for i, term in enumerate(terms):
         try:
             rxs.append(re.compile(term, re.IGNORECASE))
@@ -588,6 +599,8 @@ def search(pattern, path=".", more=None):
             if i == 0:
                 raise
             rxs.append(re.compile(re.escape(term), re.IGNORECASE))  # an extra word is taken literally
+        if re.fullmatch(r"[^\W\d_]{%d,}" % MIN_STEM, term):  # a plain word: its other forms count too
+            forms[i] = re.compile(r"\b" + re.escape(term[:MIN_STEM]) + r"\w*", re.IGNORECASE)
     found, order, docs, raw = {}, [], 0, 0  # file -> (set of matching terms, hit lines)
     for dirpath, dirnames, filenames in os.walk(resolve(path, ask=True)):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
@@ -617,7 +630,8 @@ def search(pattern, path=".", more=None):
                 continue
             rel = os.path.relpath(p, ROOT)
             for i, line in enumerate(text.splitlines(), 1):
-                matched = [n for n, rx in enumerate(rxs) if rx.search(line)]
+                matched = [n for n, rx in enumerate(rxs) if rx.search(line) or n in forms
+                           and any(same_word(terms[n], w) for w in forms[n].findall(line))]
                 if matched and raw < MAX_RAW_HITS:
                     if rel not in found:
                         found[rel] = (set(), [])

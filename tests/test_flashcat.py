@@ -934,6 +934,20 @@ class SearchTest(FlashcatTest):
         self.assertTrue(lines[1].startswith("letter.txt:1"), result)
         self.assertIn("(no matches for: kündigen, Kündigung)", result)
 
+    def test_other_forms_of_a_word_are_found(self):
+        for a, b in (("Frist", "Fristen"), ("kündigen", "Kündigung"), ("cancel", "cancellation"),
+                     ("Vertrag", "Vertragsnummer"), ("Versicherung", "Versicherer")):
+            self.assertTrue(self.chat.same_word(a, b) and self.chat.same_word(b, a), (a, b))
+        for a, b in (("Vertrag", "Vertreter"), ("Frist", "Frisur"), ("Miete", "Mitte"), ("cat", "cats")):
+            self.assertFalse(self.chat.same_word(a, b), (a, b))
+        # known imprecision of a rule without grammar: words that only start alike (the model reads the lines)
+        self.assertTrue(self.chat.same_word("contract", "contrary"))
+        result = self.chat.search("Kündigungsfristen", more=["Fristen", "Laufzeiten"])
+        self.assertTrue(result.startswith("contract.txt:2"), result)   # says "Frist" and "Laufzeit"
+        self.assertIn("letter.txt:1", result)
+        self.assertIn("(no matches for: Kündigungsfristen)", result)
+        self.assertIn("No matches", self.chat.search("Fri.ten"))  # an expression is taken as written
+
     def test_one_pattern_works_as_before_and_odd_extra_words_do_no_harm(self):
         self.assertEqual(self.chat.search("quartal"), "contract.txt:2: Die Laufzeit endet mit einer Frist von drei "
                                                       "Monaten zum Quartalsende.")
