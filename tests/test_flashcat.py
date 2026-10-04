@@ -475,6 +475,26 @@ class CommandTest(FlashcatTest):
         shown = os.read(master, 1000) if select.select([master], [], [], 0.5)[0] else b""  # the echo of the typing
         self.assertNotIn(b"FAKE", shown)
 
+    def test_only_a_short_list_of_system_services_can_be_reached(self):
+        profile = self.chat.sandbox_profile("/tmp/x")
+        self.assertIn("(deny mach-lookup)\n(allow mach-lookup ", profile)
+        self.assertEqual(profile.count("mach-lookup"), 2)  # no other rule opens services again
+        for name in self.chat.SANDBOX_SERVICES:
+            for risky in ("pasteboard", "launchservicesd", "Security", "secd", "siri", "usernoted", "nsurlsession",
+                          "tccd", "metadata", "DiskArbitration", "modifydb", "windowserver", "distributed"):
+                self.assertNotIn(risky, name)
+        # the services that are allowed are enough for the ordinary things: the user's name, time zone, a compiler
+        result = self.run_cmd("id -un; /usr/bin/python3 -c 'import os, pwd, time; print(pwd.getpwuid(os.getuid()).pw_name"
+                              ", time.tzname[0])'; printf 'int main(){return 0;}' > t.c && cc t.c -o t && ./t && echo BUILT")
+        import getpass
+        self.assertEqual(result.splitlines()[1], getpass.getuser())
+        self.assertIn(getpass.getuser() + " ", result.splitlines()[2])
+        self.assertIn("BUILT", result)
+
+    def test_nested_sandbox_gets_a_hint(self):
+        result = self.run_cmd("echo 'sandbox-exec: sandbox_apply: Operation not permitted'; exit 1")
+        self.assertIn("--disable-sandbox", result)
+
     def test_cannot_run_shortcuts(self):
         self.assertNotIn("REACHED", self.run_cmd("shortcuts list >/dev/null 2>&1 && echo REACHED"))
 
@@ -768,7 +788,10 @@ class AutoCompactTest(FlashcatTest):
         with mock.patch.object(self.chat, "call_model", return_value={"role": "assistant", "content": "- summary"}):
             self.assertTrue(self.chat.auto_compact(messages, task="rename the files"))
         self.assertEqual(messages[0]["content"], "sys")
-        self.assertIn("- summary", messages[1]["content"])
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[2]["role"], "assistant")  # the notes are the model's own message
+        self.assertTrue(messages[2]["content"].startswith(self.chat.NOTES_START))
+        self.assertIn("- summary", messages[2]["content"])
         self.assertIn("rename the files", messages[-1]["content"])
         self.assertEqual(self.chat.state["used"], 0)
 
@@ -830,7 +853,7 @@ class AutoCompactTest(FlashcatTest):
         self.assertEqual(sent[0]["max_tokens"], self.chat.SUMMARY_TOKENS)
         self.assertNotIn("tools", sent[1])  # the model called a tool instead of summarizing: asked again without
         self.assertEqual(sent[1]["max_tokens"], self.chat.SUMMARY_TOKENS)
-        self.assertIn("- notes", new[1]["content"])
+        self.assertIn("- notes", new[2]["content"])
 
     def test_not_before_the_limit_not_when_off_and_never_to_an_empty_chat(self):
         messages = self.history()

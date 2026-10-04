@@ -211,7 +211,8 @@ locked.** Details: [SECURITY.md](SECURITY.md).
 - The macOS sandbox enforces the rules, whatever the command does: **no internet** (not even name
   lookups), **writing only inside the start folder** (never its backups), no reading of your other files,
   other apps' temporary files, private data and key files, no opening apps or web pages, no clipboard,
-  no keychain, no changing other apps' settings, no Shortcuts, no stopping other programs, no writing
+  no keychain, no changing other apps' settings, no Shortcuts or notifications (system services are
+  blocked except a short list that tools need), no stopping other programs, no writing
   into terminal windows. Commands are stopped after 2 minutes (at most 10), cannot ask for input, and nothing they
   started keeps running afterwards.
 - If a command adds git hooks or git settings that would run programs the next time you use git

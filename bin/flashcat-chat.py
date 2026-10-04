@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -1160,6 +1160,22 @@ DESTRUCTIVE = re.compile(r"(^|[\s;&|(`])(rm|rmdir|mv|dd|truncate|shred|unlink|fi
                          r"git\s+(reset|clean|checkout|restore|stash|rebase|push\s+-f))\b|(^|[^-=>&0-9])>(?![&>]|\s*/dev/null)")
 
 
+# The system services a command may talk to. Found by running compilers, interpreters, git and build tools with
+# every service blocked and reading what they asked for (log show, sender "Sandbox"); with these, their output is
+# the same as without the rule. Add a name only for a tool that fails without it, and only if the service cannot
+# do anything outside the sandbox for the command.
+SANDBOX_SERVICES = (
+    "com.apple.bsd.dirhelper",                         # the user's temporary folders
+    "com.apple.system.opendirectoryd.libinfo",         # user and group names (whoami, ls -l, os.userInfo())
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.notification_center",            # notify(3): time zone and settings changes
+    "com.apple.logd", "com.apple.system.logger", "com.apple.diagnosticd",  # writing log messages
+    "com.apple.lsd.mapdb",                             # file types (read only; opening things stays blocked)
+    "com.apple.CoreServices.coreservicesd",            # file information for Apple's own tools
+    "com.apple.cfprefsd.daemon", "com.apple.cfprefsd.agent",  # system-wide settings (language); see the rules below
+)
+
+
 def sb_string(path):
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -1178,9 +1194,10 @@ def sandbox_profile(own_tmp):
     """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and the
     command's own temporary folder `own_tmp`, no reading of user files outside the start folder (home folders, other
     users, external drives, other apps' temporary files - system files and developer tools stay readable), private
-    data and key files blocked like for the other tools, no opening apps or URLs, no clipboard, no keychain, no
-    settings of apps (macOS writes them on a program's behalf, outside the folder), no Shortcuts, no signals to
-    other programs, no reading or writing of terminal windows."""
+    data and key files blocked like for the other tools, no system services except a short list (so no opening
+    apps or URLs, no clipboard, no keychain, no Shortcuts, no notifications), no settings of apps (macOS writes
+    them on a program's behalf, outside the folder), no signals to other programs, no reading or writing of
+    terminal windows."""
     home, root = HOME, ROOT
     private = f'(regex #"^{sb_regex(home)}/\\.") (subpath {sb_string(os.path.join(home, "Library"))})'
     top = os.path.relpath(root, home).split(os.sep)[0] if inside(root.lower(), home.lower()) else ""
@@ -1194,12 +1211,11 @@ def sandbox_profile(own_tmp):
         "(deny network*)",
         "(deny lsopen)",
         "(deny appleevent-send)",
-        '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") '
-        '(global-name "com.apple.coreservices.quarantine-resolver") (global-name "com.apple.pasteboard.1") '
-        '(global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc") '
-        '(global-name "com.apple.secd") (global-name-regex #"^com\\.apple\\.nsurlsessiond") '
-        # the Shortcuts app would run the user's shortcuts outside the sandbox
-        '(global-name-regex #"^com\\.apple\\.siri\\."))',
+        # System services act for a command outside the sandbox (clipboard, keychain, opening apps, Shortcuts,
+        # notifications, Spotlight, disks, downloads, …), so none can be reached except the few that ordinary
+        # tools need to run at all - see SANDBOX_SERVICES.
+        "(deny mach-lookup)",
+        "(allow mach-lookup " + " ".join(f'(global-name "{name}")' for name in SANDBOX_SERVICES) + ")",
         # app settings (defaults write): the settings service writes them in ~/Library for the command, and some
         # start programs (e.g. a terminal's startup command). Only the system-wide ones (language, …) stay readable.
         "(deny user-preference-read user-preference-write)",
@@ -1512,6 +1528,9 @@ def _run_sandboxed(command, timeout, own_tmp, run_id, git_before):
         note = (" The command tried to start a server (listen on a port). Servers cannot run here: commands have no "
                 "network and nothing keeps running after a command. Tell the user to start it themselves in another "
                 "terminal window in this folder, or run a build command that finishes instead.")
+    elif "sandbox_apply: Operation not permitted" in output:
+        note = (" The program tried to start a sandbox of its own, which is not possible inside this one. Try its "
+                "option to switch that off (Swift: swift build --disable-sandbox).")
     elif "operation not permitted" in output.lower():  # Node and Go write it in lower case
         note = (" The sandbox blocked something (Operation not permitted): internet, writing outside the folder or "
                 "private data are not available to commands.")
@@ -2552,6 +2571,9 @@ def auto_compact(messages, task=""):
     return True
 
 
+NOTES_INFO = ("(Info: to save context, the earlier part of our conversation was replaced by the notes you wrote "
+              "about it. Go on from them - what they say you did, you did in this conversation.)")
+NOTES_START = "My notes on our conversation so far:\n"
 SUMMARY_TOKENS = 1500  # the most a summary may take (about two minutes of writing on a slow Mac)
 
 
@@ -2560,12 +2582,13 @@ def compact(messages, quiet=False, task=""):
         print("Nothing to summarize yet.\n")
         return messages
     request = without_images(messages) + [{"role": "user", "content": (
-        "Summarize our conversation so far for yourself so we can continue with less context. "
+        "Write notes on our conversation so far for yourself, so we can continue with less context - in the "
+        "first person, as what you did (\"I read stats.py: it has mean() and median()\", \"I changed …\"). "
         "Keep all important facts, file names, results, decisions and open tasks. "
         "Say which files you already read or changed and what matters in them (names of functions, key values). "
         + ("You are in the middle of a task: also keep what you already did and found out for it with the tools "
            "(the parts of file contents and command results that matter) and what is still to do. " if task else "") +
-        "Only the summary, as short bullet points (at most about 400 words, never whole file contents), in the "
+        "Only the notes, as short bullet points (at most about 400 words, never whole file contents), in the "
         "language of the conversation.")}]
     if not quiet:
         print(f"{DIM}  summarizing the chat …{RESET}")
@@ -2583,10 +2606,9 @@ def compact(messages, quiet=False, task=""):
         if not quiet:
             print("The model returned no summary – the chat stays as it is.\n")
         return messages
-    new = [messages[0],
-           {"role": "user", "content": "Summary of our conversation so far (your own notes: everything in it "
-                                       "happened in this chat, including the files you read):\n" + summary},
-           {"role": "assistant", "content": INTERNAL_REPLIES[1]}]
+    # the notes stand in the chat as the model's own message: handed back as a message of the user, the model
+    # took them for something it was told and said it "had not read any files yet"
+    new = [messages[0], {"role": "user", "content": NOTES_INFO}, {"role": "assistant", "content": NOTES_START + summary}]
     if not quiet:
         print(f"{DIM}{summary}{RESET}\n")
         print(f"Chat summarized ({len(messages) - 1} → 2 messages).\n")
@@ -3343,7 +3365,8 @@ def last_answer(messages):
     """Newest real reply (not the internal notes added by /undo or /compact)."""
     return state["last_answer"] or next(
         (m["content"] for m in reversed(messages) if m.get("role") == "assistant" and isinstance(m.get("content"), str)
-         and m["content"].strip() and m["content"] not in INTERNAL_REPLIES), "")
+         and m["content"].strip() and m["content"] not in INTERNAL_REPLIES
+         and not m["content"].startswith(NOTES_START)), "")
 
 
 def handle_command(user, messages):

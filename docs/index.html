@@ -95,10 +95,7 @@
 
   /* ---------- hero ---------- */
   .hero { position: relative; background: var(--h-bg); color: var(--h-fg); }
-  .manline { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding: 20px 0;
-    font-size: 14px; font-weight: 700; letter-spacing: .04em; }
-  .manline .mid { color: var(--h-muted); }
-  .toc { display: flex; flex-wrap: wrap; gap: 0 24px; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
+  .toc { display: flex; flex-wrap: wrap; gap: 0 24px; padding-top: 14px; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
   .toc a { color: var(--h-fg); text-decoration: none; padding: 10px 0; }
   .toc a:hover { text-decoration: underline; text-underline-offset: 4px; }
   .cover { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 48px;
@@ -161,11 +158,14 @@
     box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .06); }
   .term-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
   .term-bar i { width: 12px; height: 12px; border-radius: 50%; }
-  .term-bar span { flex: 1; text-align: center; font-size: 12px; color: var(--muted); margin-right: 52px; }
+  .term-bar span { flex: 1; min-width: 0; text-align: center; font-size: 12px; color: var(--muted); margin-right: 52px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .term-body { padding: 8px 24px 26px; font-size: 13.5px; line-height: 1.55; color: var(--soft); min-height: 440px; overflow-x: auto; }
   .term-body > div { white-space: pre; min-height: 1.55em; }
   .term-body img { display: block; width: 100%; height: auto; }
-  .t-prompt { color: var(--text); } .t-prompt::before { content: "❯ "; color: var(--accent); }
+  .t-prompt, .t-plan { color: var(--text); } .t-prompt::before { content: "❯ "; color: var(--accent); }
+  .t-plan::before { content: "plan ❯ "; color: var(--blue); }
+  .t-del { color: #e06c75; } .t-add { color: var(--green); }
   .t-tool, .t-cat { color: var(--muted); }
   .t-head { color: var(--blue); font-weight: 700; }
   .t-ok { color: var(--green); }
@@ -270,7 +270,6 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <div class="manline"><span>FLASHCAT(1)</span><span class="mid">Local AI for the Mac terminal</span><span>FLASHCAT(1)</span></div>
     <nav class="toc" aria-label="Sections">
       <a href="#synopsis">SYNOPSIS</a>
       <a href="#description">DESCRIPTION</a>
@@ -306,13 +305,15 @@
     <h2>SYNOPSIS</h2>
     <div class="sec-body">
       <div class="synopsis">
-        <div><b>flashcat</b> [<span class="opt">--backend</span>] [<span class="opt">--update</span>]</div>
+        <div><b>flashcat</b> [<span class="opt">--continue</span>] [<span class="opt">--model</span> name]</div>
+        <div><b>flashcat</b> "which PDF is the newest invoice?"</div>
         <div class="pipe">cat log | <b style="color:var(--text)">flashcat</b> "why?"</div>
       </div>
       <p class="note" style="font-size:16px">Pick a question and watch Flashcat answer it:</p>
       <div class="chips" role="group" aria-label="Demo questions">
         <button type="button" class="chip" data-demo="costs" aria-pressed="true">❯ Show costs.csv as a table …</button>
         <button type="button" class="chip" data-demo="invoice" aria-pressed="false">❯ which invoice is due first?</button>
+        <button type="button" class="chip" data-demo="plan" aria-pressed="false">❯ /plan, then fix the failing test</button>
       </div>
       <div class="demo">
         <div class="peek-clip" aria-hidden="true"><pre class="cat peek"> /\_/\
@@ -530,14 +531,16 @@
   const w = [0, 1, 2].map(k => Math.max(...rows.map(r => r[k].length)));
   const rule = (l, m, r) => "  " + l + w.map(n => "─".repeat(n + 2)).join(m) + r;
   const row = r => "  │" + r.map((c, k) => " " + c.padEnd(w[k]) + " ").join("│") + "│";
-  // the card Flashcat shows before it writes a file: numbered lines with a green bar
-  const card = (title, lines) => {
-    const body = lines.map((l, n) => "▌" + String(n + 1).padStart(4) + "  " + l);
-    const width = Math.max(title.length + 4, ...body.map(l => l.length)) + 2;
+  // the cards Flashcat shows: a box with a title; a line is text or [kind, text]
+  const box = (title, lines) => {
+    const body = lines.map(l => Array.isArray(l) ? l : ["table", l]);
+    const width = Math.max(title.length + 4, ...body.map(l => l[1].length)) + 2;
     return [["tool", "  ╭─ " + title + " " + "─".repeat(width - title.length - 3) + "╮"],
-      ...body.map(l => ["table", "  │ " + l.padEnd(width - 1) + "│"]),
+      ...body.map(([kind, l]) => [kind, "  │ " + l.padEnd(width - 1) + "│"]),
       ["tool", "  ╰" + "─".repeat(width) + "╯"]];
   };
+  // before it writes a file: numbered lines with a green bar
+  const card = (title, lines) => box(title, lines.map((l, n) => "▌" + String(n + 1).padStart(4) + "  " + l));
   const head = [["cat", "   /\\_/\\"], ["cat", `  ( ${awake} )`], ["cat", "   > ^ <"], ["", ""]];
   const scripts = {
     costs: [...head,
@@ -561,7 +564,32 @@
       ["ask", "  ? Write? [Y/N] y"],
       ["ok", "  ✓ created: invoices.md"], ["", ""],
       ["answer", "⏺ The invoice due first is BH-55710 from Blue Harbor Hosting,"],
-      ["answer", "  which is due on September 29, 2026."]]
+      ["answer", "  which is due on September 29, 2026."]],
+    plan: [...head,
+      ["prompt", "/test python3 -m unittest -q"],
+      ["ok", "  ✓ runs after every change Flashcat makes here (in the sandbox, without asking)"], ["", ""],
+      ["prompt", "/plan"],
+      ["answer", "Plan mode is ON: Flashcat only looks and presents a plan – nothing is changed or run."], ["", ""],
+      ["plan", "Find the bug that makes the tests fail"], ["", ""],
+      ["tool", "  ◇ reads test_stats.py", true], ["tool", "  ◇ reads stats.py", true], ["", ""],
+      ["head", "⏺ Plan"],
+      ["answer", "  1. stats.py, median(): with an even number of values it takes the"],
+      ["answer", "     wrong two middle values – change line 10 to use middle - 1 and middle"],
+      ["answer", "  2. Run the tests again"], ["", ""],
+      ["plan", "/plan"],
+      ["answer", "Plan mode is OFF: changes are possible again (each one asks first)."], ["", ""],
+      ["prompt", "go ahead"], ["", ""],
+      ["tool", "  ◇ changes stats.py"],
+      ...box("changes stats.py", [
+        ["tool", "    9          return ordered[middle]"],
+        ["del", "▌  10      return (ordered[middle] + ordered[middle + 1]) / 2"],
+        ["add", "▌  10      return (ordered[middle - 1] + ordered[middle]) / 2"]]),
+      ["ask", "  ? Change? [Y/N] y"],
+      ["ok", "  ✓ changed: stats.py  · backup in .flashcat-backup"], ["", ""],
+      ...box("runs your test command", ["python3 -m unittest -q"]),
+      ...box("✓ exit code 0 · 0.3 s", ["Ran 3 tests in 0.000s", "", "OK"]), ["", ""],
+      ["answer", "⏺ The bug was in median(): for an even number of values it used the"],
+      ["answer", "  wrong indices. Fixed – all tests pass."]]
   };
   const term = document.getElementById("term");
   let playTimer;
@@ -590,6 +618,7 @@
   }
   document.querySelectorAll(".chip").forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll(".chip").forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    started = true;  // a picked demo is not replaced by the first one when the terminal scrolls into view
     play(b.dataset.demo);
   }));
   // start the demo once it scrolls into view (or right away without IntersectionObserver)
