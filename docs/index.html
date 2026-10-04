@@ -365,7 +365,7 @@
 <div><span class="locked">└── .zshrc</span><span class="why">           ✕ locked · hidden file</span></div>
         </figure>
         <ol class="rules">
-          <li><strong>[Y/n]  every change asks first</strong><span>You see a preview – or the full command – before you answer <code>Y</code>. The old version is backed up, and <code>/undo</code> reverts the last change.</span></li>
+          <li><strong>[Y/N]  every change asks first</strong><span>You see a preview – or the full command – before you answer <code>Y</code>. The old version is backed up, and <code>/undo</code> reverts the last change.</span></li>
           <li><strong>[sandbox]  commands stay in their box</strong><span>Only the start folder and its subfolders. Commands run in a sandbox: no internet, they can only write inside the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone. Only an image you drag or paste in yourself comes from outside.</span></li>
           <li><strong>[offline]  stays on your Mac</strong><span>The model runs locally in LM Studio or Ollama. Nothing leaves your computer unless you allow a web request – and you always see the full address first.</span></li>
         </ol>
@@ -530,25 +530,38 @@
   const w = [0, 1, 2].map(k => Math.max(...rows.map(r => r[k].length)));
   const rule = (l, m, r) => "  " + l + w.map(n => "─".repeat(n + 2)).join(m) + r;
   const row = r => "  │" + r.map((c, k) => " " + c.padEnd(w[k]) + " ").join("│") + "│";
+  // the card Flashcat shows before it writes a file: numbered lines with a green bar
+  const card = (title, lines) => {
+    const body = lines.map((l, n) => "▌" + String(n + 1).padStart(4) + "  " + l);
+    const width = Math.max(title.length + 4, ...body.map(l => l.length)) + 2;
+    return [["tool", "  ╭─ " + title + " " + "─".repeat(width - title.length - 3) + "╮"],
+      ...body.map(l => ["table", "  │ " + l.padEnd(width - 1) + "│"]),
+      ["tool", "  ╰" + "─".repeat(width) + "╯"]];
+  };
   const head = [["cat", "   /\\_/\\"], ["cat", `  ( ${awake} )`], ["cat", "   > ^ <"], ["", ""]];
   const scripts = {
     costs: [...head,
       ["prompt", "Show costs.csv as a table and check it against the budget in notes.md"], ["", ""],
       ["tool", "  ◇ reads costs.csv", true], ["tool", "  ◇ reads notes.md", true], ["", ""],
-      ["head", "● Costs Overview"], ["", ""],
+      ["head", "⏺ Costs Overview"], ["", ""],
       ["table", rule("┌", "┬", "┐")], ["table", row(rows[0])], ["table", rule("├", "┼", "┤")],
       ...rows.slice(1).map(r => ["table", row(r)]), ["table", rule("└", "┴", "┘")], ["", ""],
       ["head", "  Budget Check"],
       ["answer", "  • Budget limit: 1,000.00 EUR (from notes.md)"],
       ["answer", "  • Total: 926.40 EUR – 73.60 EUR under budget"]],
     invoice: [...head,
-      ["prompt", "which invoice is due first?"], ["", ""],
-      ["tool", "  ◇ reads invoice_1.pdf", true], ["tool", "  ◇ reads invoice_2.pdf", true], ["", ""],
-      ["head", "● write invoices.md"],
-      ["tool", "  shows the table it wants to write …"],
-      ["ask", "  Apply this change? [Y/n] y"],
-      ["ok", "  ✓ invoices.md written · /undo reverts it"], ["", ""],
-      ["answer", "The Blue Harbor Hosting invoice is due first."]]
+      ["prompt", "Which of my invoices is due first? Put all of them into a table in invoices.md"], ["", ""],
+      ["tool", "  ◇ looks into the folder", true], ["tool", "  ◇ reads blue-harbor-hosting.pdf", true],
+      ["tool", "  ◇ reads northwind-design.pdf", true], ["tool", "  ◇ writes invoices.md"], ["", ""],
+      ...card("new file invoices.md · 4 lines", [
+        "| Invoice | Vendor | Due Date | Total Amount |",
+        "| :--- | :--- | :--- | :--- |",
+        "| BH-55710 | Blue Harbor Hosting | September 29, 2026 | $258.00 |",
+        "| 2026-081 | Northwind Design Studio | October 2, 2026 | $1,380.00 |"]),
+      ["ask", "  ? Write? [Y/N] y"],
+      ["ok", "  ✓ created: invoices.md"], ["", ""],
+      ["answer", "⏺ The invoice due first is BH-55710 from Blue Harbor Hosting,"],
+      ["answer", "  which is due on September 29, 2026."]]
   };
   const term = document.getElementById("term");
   let playTimer;
