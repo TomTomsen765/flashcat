@@ -162,6 +162,8 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .term-body { padding: 8px 24px 26px; font-size: 13.5px; line-height: 1.55; color: var(--soft); min-height: 440px; overflow-x: auto; }
   .term-body > div { white-space: pre; min-height: 1.55em; }
+  /* questions and answers wrap like in a real terminal; tables and cards shrink to fit instead (see fit()) */
+  .term-body > .t-prompt, .term-body > .t-plan, .term-body > .t-answer, .term-body > .t-ok, .term-body > .t-ask { white-space: pre-wrap; }
   .term-body img { display: block; width: 100%; height: auto; }
   .t-prompt, .t-plan { color: var(--text); } .t-prompt::before { content: "❯ "; color: var(--accent); }
   .t-plan::before { content: "plan ❯ "; color: var(--blue); }
@@ -605,9 +607,29 @@
     d.innerHTML = '<span style="color:var(--accent)">❯ </span><span class="cursor"></span>';
     return d;
   }
+  // the width of one character, as a share of the font size (measured once, in the terminal's own font)
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-size:100px";
+  probe.textContent = "0".repeat(20);
+  term.appendChild(probe);
+  const charWidth = probe.getBoundingClientRect().width / 20 / 100 || .6;
+  probe.remove();
+  const WRAPS = ["prompt", "plan", "answer", "ok", "ask"];
+  let current;
+  // narrow screens: shrink the text until the widest table or card fits (down to 8px, then it scrolls)
+  function fit() {
+    if (!current) return;
+    const widest = Math.max(...scripts[current].filter(l => !WRAPS.includes(l[0])).map(l => (l[1] || "").length + (l[2] ? 4 : 0)));
+    const style = getComputedStyle(term);
+    const room = term.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    term.style.fontSize = Math.max(8, Math.min(13.5, room / (widest * charWidth))).toFixed(2) + "px";
+  }
+  addEventListener("resize", fit);
   function play(key) {
     clearInterval(playTimer);
     term.replaceChildren();
+    current = key;
+    fit();
     const script = scripts[key];
     if (reduced) { script.forEach(l => term.appendChild(line(l))); term.appendChild(cursorLine()); return; }
     let i = 0;
