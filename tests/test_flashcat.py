@@ -1191,6 +1191,65 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args[args.index("--mmproj") + 1], os.path.join(models, "mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"))
         self.assertFalse(os.path.exists(os.path.join(home, ".flashcat", "active", "llamacpp")))
 
+    def test_chosen_model_is_remembered(self):
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        fake_bin, work = os.path.join(home, "fake-bin"), os.path.join(home, "work")
+        models = os.path.join(home, ".flashcat", "models")
+        for folder in (fake_bin, work, models):
+            os.makedirs(folder)
+        for name in ("gemma-4-26B-A4B-it-QAT-Q4_0.gguf", "Other-Model-Q4.gguf"):
+            with open(os.path.join(models, name), "wb") as f:
+                f.write(b"x")
+        with open(os.path.join(fake_bin, "llama-server"), "w") as f:  # stand-in: notes its arguments, answers "ready"
+            f.write('''#!/usr/bin/python3
+import http.server, os, sys, threading
+with open(os.environ["HOME"] + "/args", "w") as f:
+    f.write(" ".join(sys.argv[1:]))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"{}")
+    do_POST = do_GET
+    def log_message(self, *args):
+        pass
+threading.Timer(20, lambda: os._exit(0)).start()
+if "broken" in " ".join(sys.argv).lower():
+    sys.exit(1)  # a model that cannot be loaded
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[sys.argv.index("--port") + 1])), Handler).serve_forever()
+''')
+        os.chmod(os.path.join(fake_bin, "llama-server"), 0o755)
+        with open(os.path.join(models, "Broken-Model.gguf"), "wb") as f:
+            f.write(b"x")
+        env = {"HOME": home, "PATH": f"{fake_bin}:/usr/bin:/bin", "FLASHCAT_BACKEND": "llamacpp",
+               "FLASHCAT_FOLDER_CONFIRMED": "1"}
+        saved = os.path.join(home, ".flashcat", "model.llamacpp")
+
+        def start(*args):
+            result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), *args], capture_output=True, text=True,
+                                    env=env, cwd=work, stdin=subprocess.DEVNULL, start_new_session=True, timeout=60)
+            with open(os.path.join(home, "args")) as f:
+                args = f.read().split()
+            return os.path.basename(args[args.index("-m") + 1]), result.stderr
+
+        self.assertEqual(start()[0], "gemma-4-26B-A4B-it-QAT-Q4_0.gguf")
+        model, said = start("--model", "other")
+        self.assertEqual(model, "Other-Model-Q4.gguf")
+        self.assertIn("from now on", said)
+        self.assertEqual(start()[0], "Other-Model-Q4.gguf")  # remembered
+        self.assertIn("Loading failed", start("--model", "broken")[1])  # one that does not load is not remembered
+        self.assertEqual(start()[0], "Other-Model-Q4.gguf")
+        self.assertEqual(start("--model", "default")[0], "gemma-4-26B-A4B-it-QAT-Q4_0.gguf")
+        self.assertFalse(os.path.exists(saved))
+        start("--model", "other")
+        os.remove(os.path.join(models, "Other-Model-Q4.gguf"))  # a remembered model that was deleted is forgotten
+        model, said = start()
+        self.assertEqual(model, "gemma-4-26B-A4B-it-QAT-Q4_0.gguf")
+        self.assertIn("no longer installed", said)
+        self.assertFalse(os.path.exists(saved))
+
     def test_cleanup_stops_only_its_own_llamacpp_server(self):
         """The noted process number may belong to another program by now: that one is left alone."""
         os.makedirs(BASE, exist_ok=True)

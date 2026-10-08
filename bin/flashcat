@@ -3,7 +3,7 @@
 # (default: Gemma 4 26B), Ollama or llama.cpp and can work with files in the current folder.
 # Usage: flashcat [options] ["question"]   (with a question: answers once and exits; input can be piped in)
 # Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
-#          name is enough), --models (list installed models), --backend [lmstudio|ollama|llamacpp] (choose the
+#          name is enough; remembered, "default" forgets it), --models (list installed models), --backend [lmstudio|ollama|llamacpp] (choose the
 #          model server when several are installed), --update (install the newest release), --version, --help.
 #          Type /help inside the chat for commands.
 # Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
@@ -36,7 +36,8 @@ Flashcat $(/usr/bin/python3 $CHAT --version | cut -d' ' -f2) – a local AI assi
                               answer about piped input (the answer alone goes to a file or pipe)
 
   -c, --continue              continue the last chat in this folder
-  -m, --model <name>          use another model (part of the name is enough)
+  -m, --model <name>          use another model from now on (part of the name is enough;
+                              --model default goes back to Gemma 4)
       --models                list the installed models
       --backend [name]        choose lmstudio, ollama or llamacpp (asks without a name)
       --update                install the newest release
@@ -265,7 +266,13 @@ if [[ $1 == --models ]]; then
   $CLEANUP $$
   exit
 fi
-if [[ $1 == --model || $1 == -m ]]; then
+# --model picks another model and Flashcat remembers it for this model server (--model default forgets it)
+MODEL_FILE=~/.flashcat/model.$BACKEND
+if [[ ( $1 == --model || $1 == -m ) && $2 == default ]]; then
+  rm -f $MODEL_FILE
+  echo "Flashcat uses the default model again ($MODEL)." >&2
+  shift 2
+elif [[ $1 == --model || $1 == -m ]]; then
   [[ -n $2 ]] || { echo "Which model? List them with: flashcat --models" >&2; $CLEANUP $$; exit 1; }
   MODEL=$(installed_models | /usr/bin/python3 -c '
 import sys
@@ -279,7 +286,16 @@ sys.exit(0 if len(hits) == 1 else 1)' "$2") || {
     $CLEANUP $$
     exit 1
   }
+  chosen=$MODEL  # remembered further down, once it has loaded
   shift 2
+elif [[ -f $MODEL_FILE ]]; then
+  remembered=$(<$MODEL_FILE)
+  if installed_models | grep -qxF -- "$remembered"; then
+    MODEL=$remembered
+  else
+    echo "The model Flashcat remembered ($remembered) is no longer installed – using the default." >&2
+    rm -f $MODEL_FILE
+  fi
 fi
 
 # Ollama without its own Gemma 4: use LM Studio's download if there is one
@@ -329,7 +345,7 @@ if ! installed_models | grep -qx -- "$MODEL"; then
   [[ -r /dev/tty ]] && read -r "answer?  Download it now? [Y/N] " </dev/tty 2>/dev/tty
   if [[ $answer != [yY]* ]]; then
     echo "Download it later with:  $hint" >&2
-    [[ $BACKEND == llamacpp ]] && echo "Or use another model: put its .gguf file into ~/.flashcat/models and start with: flashcat --model <name>" >&2
+    [[ $BACKEND == llamacpp ]] && echo "Or use another model: put its .gguf file into ~/.flashcat/models and start once with: flashcat --model <name>" >&2
     $CLEANUP $$
     exit 1
   fi
@@ -422,6 +438,11 @@ else
     grep -qx "$RUN_MODEL" $STATE/ollama-loaded 2>/dev/null || print -r -- "$RUN_MODEL" >> $STATE/ollama-loaded
   fi
   MODEL=$RUN_MODEL
+fi
+
+if [[ -n ${chosen:-} && $(cat $MODEL_FILE 2>/dev/null) != $chosen ]]; then
+  print -r -- $chosen > $MODEL_FILE
+  echo "Flashcat uses $chosen from now on. Back to the default: flashcat --model default" >&2
 fi
 
 /usr/bin/python3 $CHAT $MODEL "$@"

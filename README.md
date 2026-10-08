@@ -45,7 +45,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/r
 The installer checks your Mac, installs the newest release of the `flashcat` command into `~/.local/bin`
 and downloads the default model, **Gemma 4 26B** (about 15.6 GB; with Ollama `gemma4:26b`, about 18 GB).
 With llama.cpp it asks first: you can say No and use a model of your own instead – put its `.gguf` file
-into `~/.flashcat/models` (models downloaded with LM Studio are found too) and start with
+into `~/.flashcat/models` (models downloaded with LM Studio are found too) and start once with
 `flashcat --model <name>`; `flashcat --models` lists what Flashcat finds.
 
 **With Homebrew** instead:
@@ -145,7 +145,8 @@ Then just talk to it:
 | `@file` | attach a file to your message (Tab completes) |
 | drag an image in | drag an image from Finder into the terminal – the long path turns into `📎[Image #1: name]`; also works for images outside the folder |
 
-Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
+Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>` (another
+model – Flashcat remembers it for the next starts, `flashcat --model default` goes back to Gemma 4),
 `flashcat --backend` (LM Studio, Ollama or llama.cpp), `flashcat --update`, `flashcat --version`, `flashcat --help`.
 
 **Ask once, without a chat:** give the question as an argument. Input you pipe in is attached to it,

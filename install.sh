@@ -260,7 +260,7 @@ if [[ $backend == llamacpp ]]; then
   else
     note "No model downloaded. Flashcat offers Gemma 4 again on its first start. To use another model instead,"
     note "put its .gguf file into ~/.flashcat/models (models downloaded with LM Studio are found too) and start"
-    note "with:  flashcat --model <name>   (flashcat --models lists what it finds)"
+    note "once with:  flashcat --model <name>   (Flashcat remembers it; flashcat --models lists what it finds)"
   fi
 elif [[ $backend == ollama ]]; then
   if has_model ollama || ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then

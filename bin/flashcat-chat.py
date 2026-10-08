@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio", "ollama" or "llamacpp", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -2828,7 +2828,7 @@ def switch_model(want):
     global MODEL, MODEL_NAME
     if BACKEND != "lmstudio":
         print("Changing the model inside the chat works with LM Studio only. Otherwise: /exit, then\n"
-              "flashcat --continue --model <name>\n")
+              "flashcat --model <name> --continue\n")
         return
     keys = installed_models()
     if not want:
@@ -3269,7 +3269,7 @@ HELP_TIPS = [
     ("drag in", "drag an image in from Finder", "also from outside the folder"),
     ("FLASHCAT.md", "standing instructions", "in the folder or ~/.flashcat/"),
     ('"question"', "answer once, no chat", 'cat log | flashcat "why?"'),
-    ("--model", "another model", "flashcat --models lists them"),
+    ("--model", "another model, remembered", "flashcat --models lists them"),
     ("--update", "newest version", "flashcat --update"),
 ]
 
