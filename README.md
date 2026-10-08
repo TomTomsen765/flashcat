@@ -17,9 +17,11 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** (both on the
    [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
    `lms` command and the local server that Flashcat uses, and they can be installed side by side.
+   LM Studio's version without a window (`llmster`) works as well.
    Already using **[Ollama](https://ollama.com)**? That works too (Gemma 4 there is `gemma4:26b`). If
-   several are installed, Flashcat asks once which one to use and remembers it – change it any time with
-   `flashcat --backend`. If LM Studio has already downloaded Gemma 4, Ollama does not have to download it
+   several are installed, the installer asks once which one to use and remembers it – change it any time with
+   `flashcat --backend`. If none is installed, the installer explains the three and, if you have Homebrew,
+   offers to install llama.cpp for you. If LM Studio has already downloaded Gemma 4, Ollama does not have to download it
    again: Flashcat offers to use LM Studio's files (both then share the same data on disk).
 
    Short on memory? **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (`brew install llama.cpp`) is the
@@ -63,7 +65,7 @@ the files you just read instead of downloading them:
 ```sh
 git clone https://github.com/TomTomsen765/flashcat.git
 cd flashcat
-less install.sh          # what it does, in about 200 lines
+less install.sh          # what it does, in about 280 lines
 bash install.sh
 ```
 
@@ -74,8 +76,10 @@ What the installer changes on your Mac, and nothing else:
 - adds `~/.local/bin` to your `PATH` in `~/.zshrc`, if it isn't there yet
 - installs the Python package `pygments` for colored code (`pip install --user`, optional) – one fixed
   version, and only if the downloaded file has the checksum written in the installer
-- downloads the model through LM Studio or Ollama (with llama.cpp, Flashcat offers the download on its
-  first start; skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
+- if several model servers are installed: asks which one to use and saves the answer in `~/.flashcat/backend`
+- if none is installed and you have Homebrew: offers `brew install llama.cpp`, and runs it only after your Yes
+- downloads the model through LM Studio or Ollama, unless it is already there (with llama.cpp, Flashcat
+  offers the download on its first start; skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
 
 Flashcat itself is one Python file using only the standard library
 ([`bin/flashcat-chat.py`](bin/flashcat-chat.py)) and a short launcher ([`bin/flashcat`](bin/flashcat)).

@@ -1246,6 +1246,20 @@ class DownloadTest(unittest.TestCase):
         for option in ("--require-hashes", "--only-binary :all:", "--no-deps", '-r "$requirements"'):
             self.assertIn(option, command)
 
+    def test_installer_installs_a_model_server_only_after_a_yes(self):
+        text = self.text("install.sh")
+        self.assertEqual(text.count("brew install llama.cpp ||"), 1)  # the one place that runs it
+        line = [l for l in text.splitlines() if "brew install llama.cpp ||" in l][0]
+        before = text[:text.index(line)].rstrip().splitlines()[-1]
+        self.assertIn('ask "Install llama.cpp now with Homebrew?"', before)
+        self.assertTrue(before.strip().startswith("if "))
+
+    def test_headless_lm_studio_is_recognised(self):
+        # its background service is called llmster: Flashcat must see it running and stop it when it started it
+        self.assertIn('pgrep -xq "LM Studio|Bionic|llmster"', self.text("bin/flashcat"))
+        self.assertIn('pgrep -xq "LM Studio|Bionic|llmster"', self.text("install.sh"))
+        self.assertIn("pkill -TERM -x llmster", self.text("bin/flashcat-cleanup"))
+
     def test_installer_checks_version_names(self):
         text = self.text("install.sh")
         function = text[text.index("valid_ref() {"):text.index("\n}\n", text.index("valid_ref() {")) + 3]

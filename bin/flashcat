@@ -236,7 +236,8 @@ trap 'exit 129' HUP TERM
 # ---------- start the model server if needed (the cleanup stops what was started here) ----------
 if [[ $BACKEND == lmstudio ]]; then
   # Was LM Studio running before? (checked before the first lms call, which starts its background service)
-  if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
+  # (the app, its background service, or the headless version, whose service is called llmster)
+  if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic|llmster"; then
     touch $STATE/service
   fi
 elif [[ $BACKEND == ollama ]] && ! ollama list >/dev/null 2>&1; then

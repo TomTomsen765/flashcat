@@ -48,7 +48,10 @@ if [[ -f $STATE/server ]]; then
 fi
 if [[ -f $STATE/service ]]; then
   sleep 1
-  pkill -TERM -f "$SERVICE_PATTERN" && say "LM Studio background service stopped."
+  stopped=
+  pkill -TERM -f "$SERVICE_PATTERN" && stopped=1
+  pkill -TERM -x llmster && stopped=1  # the headless version of LM Studio
+  [[ -n $stopped ]] && say "LM Studio background service stopped."
   rm -f $STATE/service
 fi
 exit 0

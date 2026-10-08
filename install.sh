@@ -21,6 +21,8 @@ MODEL_URL="https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
 BIN="$HOME/.local/bin"
 LMS="$HOME/.lmstudio/bin/lms"
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"
+# is LM Studio running in any form: its background service, the app, or the headless version (llmster)?
+lmstudio_running() { pgrep -f "$SERVICE_PATTERN" >/dev/null || pgrep -xq "LM Studio|Bionic|llmster"; }
 FILES=(flashcat flashcat-chat.py flashcat-cleanup)
 CURL=(curl --proto '=https' --tlsv1.2 -fsSL)  # https only, also when a download is redirected
 # the one outside package (colored code): exactly this file from PyPI, checked by its SHA-256
@@ -80,20 +82,81 @@ fi
   || fail "Python 3.8 or newer is needed (/usr/bin/python3). Update the command line tools and try again."
 ok "Python $(/usr/bin/python3 -c 'import platform; print(platform.python_version())')"
 
-if [[ -x $LMS ]]; then
-  backend=lmstudio
-  ok "LM Studio"
-elif command -v ollama >/dev/null 2>&1; then
-  backend=ollama
-  ok "Ollama"
-elif command -v llama-server >/dev/null 2>&1; then
-  backend=llamacpp
-  ok "llama.cpp"
-else
-  fail "No model server found. Install LM Studio or LM Studio Bionic from ${BOLD}https://lmstudio.ai/download${RESET}
-    (or Ollama from ${BOLD}https://ollama.com${RESET}, or llama.cpp with: brew install llama.cpp), open it once,
-    then run this installer again."
+# ---------- model server ----------
+have() {
+  case $1 in
+    lmstudio) [[ -x $LMS ]] ;;
+    ollama)   command -v ollama >/dev/null 2>&1 ;;
+    llamacpp) command -v llama-server >/dev/null 2>&1 ;;
+    *)        return 1 ;;
+  esac
+}
+backend_name() { case $1 in lmstudio) echo "LM Studio" ;; ollama) echo "Ollama" ;; llamacpp) echo "llama.cpp" ;; esac; }
+gguf_in() { [[ -n $(find "$@" -name "$LLAMACPP_FILE" 2>/dev/null | head -1) ]]; }
+has_model() {  # is Gemma 4 already there? (checked in the model folders: asking the apps would start them)
+  local store="${OLLAMA_MODELS:-$HOME/.ollama/models}/manifests/registry.ollama.ai/library"
+  case $1 in
+    lmstudio) gguf_in "$HOME/.lmstudio/models" ;;
+    ollama)   [[ -f $store/${OLLAMA_MODEL%%:*}/${OLLAMA_MODEL#*:} || -f $store/gemma4-26b-lmstudio/latest ]] ;;
+    llamacpp) gguf_in "$HOME/.lmstudio/models" "$HOME/.flashcat/models" ;;
+  esac
+}
+backend_note() {
+  if has_model "$1"; then
+    if [[ $1 == llamacpp ]]; then echo "Gemma 4 downloaded ✓, needs the least memory"; else echo "Gemma 4 downloaded ✓"; fi
+  elif [[ $1 == ollama ]] && has_model lmstudio; then echo "can use LM Studio's download of Gemma 4"
+  elif [[ $1 == ollama ]]; then echo "not downloaded yet (about 18 GB)"
+  else echo "not downloaded yet (15.6 GB)"; fi
+}
+
+step "Model server"
+installed=""
+for b in lmstudio ollama llamacpp; do
+  if have "$b"; then installed="$installed $b"; ok "$(backend_name "$b")"; fi
+done
+if [[ -z $installed ]]; then
+  note "Flashcat needs a program that runs the model on your Mac. None is installed yet:"
+  note "  LM Studio   an app with a window, the one Flashcat is built and tested with   https://lmstudio.ai/download"
+  note "  Ollama      a small app in the menu bar                                       https://ollama.com"
+  note "  llama.cpp   no app at all, needs the least memory                             brew install llama.cpp"
+  if command -v brew >/dev/null 2>&1 && ask "Install llama.cpp now with Homebrew?"; then
+    brew install llama.cpp || fail "Installing llama.cpp failed. Try:  brew install llama.cpp"
+    have llamacpp || fail "llama.cpp was installed, but llama-server is not on your PATH. Open a new terminal and run this installer again."
+    installed=" llamacpp"
+    ok "llama.cpp"
+  else
+    fail "No model server found. Install one of the three (LM Studio: open it once afterwards), then run this
+    installer again."
+  fi
 fi
+# which one: FLASHCAT_BACKEND, else an earlier choice, else the only one - with several, ask once and remember
+backend="${FLASHCAT_BACKEND:-}"
+[[ -z $backend && -f $HOME/.flashcat/backend ]] && backend=$(<"$HOME/.flashcat/backend")
+if ! have "$backend"; then
+  set -- $installed
+  backend=$1
+  if (( $# > 1 )) && { : </dev/tty; } 2>/dev/null; then  # only with a terminal to ask in
+    default=1 i=0
+    for b in "$@"; do
+      i=$((i + 1))
+      has_model "$b" && { default=$i; break; }
+    done
+    i=0
+    for b in "$@"; do
+      i=$((i + 1))
+      printf '  %s  %-11s %s%s%s\n' "$i" "$(backend_name "$b")" "$DIM" "$(backend_note "$b")" "$RESET"
+    done
+    answer=""
+    read -r -p "  ${ORANGE}?${RESET} Which one should Flashcat use? ${DIM}[1–$#, Enter = $default]${RESET} " answer </dev/tty || true
+    answer=${answer:-$default}
+    [[ $answer =~ ^[1-9]$ ]] && (( answer <= $# )) || fail "Please answer with a number from 1 to $#. Run the installer again."
+    backend=${!answer}
+    mkdir -p -m 700 "$HOME/.flashcat"
+    printf '%s\n' "$backend" > "$HOME/.flashcat/backend"
+    note "Change it later with:  flashcat --backend"
+  fi
+fi
+ok "Flashcat uses $(backend_name "$backend")"
 
 # ---------- program files ----------
 step "Installing Flashcat"
@@ -158,16 +221,18 @@ fi
 # ---------- model ----------
 step "Model"
 service_running_before=1
-pgrep -f "$SERVICE_PATTERN" >/dev/null || pgrep -xq "LM Studio|Bionic" || service_running_before=
+lmstudio_running || service_running_before=
 if [[ $backend == llamacpp ]]; then
-  if [[ -n $(find "$HOME/.lmstudio/models" "$HOME/.flashcat/models" -name "$LLAMACPP_FILE" 2>/dev/null | head -1) ]]; then
+  if has_model llamacpp; then
     ok "Gemma 4 26B is already downloaded"
   else
     note "Gemma 4 26B (about 15.6 GB) is not downloaded yet – flashcat offers it on the first start."
   fi
 elif [[ $backend == ollama ]]; then
-  if ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
+  if has_model ollama || ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
     ok "Gemma 4 26B is already downloaded"
+  elif has_model lmstudio; then
+    note "LM Studio has already downloaded Gemma 4 – flashcat offers to use it with Ollama on the first start (no download)."
   elif [[ ${FLASHCAT_SKIP_MODEL:-} == 1 ]]; then
     note "Skipped. Download it later with:  ollama pull $OLLAMA_MODEL (or when flashcat starts)"
   elif ! ollama list >/dev/null 2>&1; then
@@ -189,6 +254,7 @@ fi
 if [[ $backend == lmstudio && -z $service_running_before ]]; then  # leave LM Studio as we found it
   sleep 1
   pkill -TERM -f "$SERVICE_PATTERN" 2>/dev/null || true
+  pkill -TERM -x llmster 2>/dev/null || true
 fi
 
 # ---------- done ----------
