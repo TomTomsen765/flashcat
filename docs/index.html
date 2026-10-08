@@ -393,6 +393,7 @@
       </div>
       <div class="verdict" aria-live="polite"><b class="okay" id="verdict">okay</b><span id="verdict-text">Close all other apps while you use Flashcat. Otherwise macOS moves parts of the model to disk and answers become much slower.</span></div>
       <p class="note">Built and tuned on a MacBook Air M5 with 24 GB. Only the M5 is tested so far – older M chips should work too, but answers will be slower. Tried it on another Mac? <a href="https://github.com/TomTomsen765/flashcat/issues">Let me know how it runs.</a></p>
+      <p class="note"><strong style="color:var(--text)">Short on memory?</strong> <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (<code>brew install llama.cpp</code>) is the leanest way to run the model: no app, only the bare model server, which Flashcat starts and stops itself. On my MacBook Air M5 it needed about 1 GB less memory than through LM Studio and answered a bit faster (one short measurement, same model and questions). Choose it with <code>flashcat --backend llamacpp</code>. Already downloaded Gemma 4 in LM Studio? llama.cpp runs those files directly, and Ollama can use them too – no second download.</p>
     </div>
   </section>
 
@@ -418,7 +419,7 @@
         </div></li>
         <li><span class="n">3</span><div class="s"><p>Go to a folder and start it: <code class="inline-cmd">cd ~/Documents &amp;&amp; flashcat</code></p></div></li>
       </ol>
-      <p class="note"><strong style="color:var(--text)">You need</strong> a Mac with Apple Silicon and at least 24 GB of memory, plus Python from Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to get them (<code>xcode-select --install</code>). Both LM Studio and Ollama installed? Flashcat asks once which one to use (change it with <code>flashcat --backend</code>). I use Flashcat with LM Studio only, and everything runs great there. Ollama works, but it still needs to be tested properly – <a href="https://github.com/TomTomsen765/flashcat/issues">let me know how it goes.</a></p>
+      <p class="note"><strong style="color:var(--text)">You need</strong> a Mac with Apple Silicon and at least 24 GB of memory, plus Python from Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to get them (<code>xcode-select --install</code>). More than one of them installed? Flashcat asks once which one to use (change it with <code>flashcat --backend</code>). I use Flashcat with LM Studio only, and everything runs great there. Ollama and llama.cpp work, but they still need to be tested properly – <a href="https://github.com/TomTomsen765/flashcat/issues">let me know how it goes.</a></p>
       <p class="note">Prefer to read the code before running it? <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a> Update later with <code>flashcat --update</code> (Homebrew: <code>brew upgrade flashcat</code>) – you only get published releases that passed the automated safety tests, and a published release cannot be changed afterwards.</p>
     </div>
   </section>
