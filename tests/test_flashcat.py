@@ -6,6 +6,7 @@ Every test gets its own fake home folder (with private files) and start folder; 
 into it. Questions to the user are answered from a list instead of the keyboard."""
 
 import builtins
+import hashlib
 import importlib.util
 import io
 import json
@@ -1104,6 +1105,63 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("not installed", result.stderr)
         with open(saved) as f:
             self.assertEqual(f.read(), "lmstudio\n")  # unchanged
+
+    def test_ollama_can_use_the_model_lm_studio_downloaded(self):
+        """Only after a Yes: the files are cloned into Ollama's store and registered under their own name."""
+        import pty
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        fake_bin, work = os.path.join(home, "fake-bin"), os.path.join(home, "work")
+        models = os.path.join(home, ".lmstudio", "models", "lmstudio-community", "gemma-4-26B-A4B-it-QAT-GGUF")
+        for folder in (fake_bin, work, models):
+            os.makedirs(folder)
+        for name, content in (("gemma.gguf", b"weights"), ("mmproj-gemma.gguf", b"projector")):
+            with open(os.path.join(models, name), "wb") as f:
+                f.write(content)
+        with open(os.path.join(fake_bin, "ollama"), "w") as f:  # stand-in: notes its calls, keeps the Modelfile
+            f.write('#!/bin/sh\necho "$@" >> "$HOME/calls"\n[ "$1" = create ] && cp "$4" "$HOME/modelfile"\n'
+                    'echo NAME\n[ "$1" = list ] && [ -f "$HOME/modelfile" ] && echo gemma4-26b-lmstudio:latest\nexit 0\n')
+        os.chmod(os.path.join(fake_bin, "ollama"), 0o755)
+        env = {"HOME": home, "PATH": f"{fake_bin}:/usr/bin:/bin", "FLASHCAT_BACKEND": "ollama",
+               "OLLAMA_HOST": "127.0.0.1:1"}  # nothing listens there, so the start ends at "Loading failed"
+        launcher = ["zsh", os.path.join(REPO, "bin", "flashcat")]
+        blobs = os.path.join(home, ".ollama", "models", "blobs")
+
+        # without a terminal nobody can say Yes: nothing is shared
+        subprocess.run(launcher, capture_output=True, env=env, cwd=work, stdin=subprocess.DEVNULL, start_new_session=True)
+        with open(os.path.join(home, "calls")) as f:
+            self.assertNotIn("create", f.read())
+        self.assertFalse(os.path.exists(blobs))
+
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(work)
+            os.execve("/bin/zsh", launcher, env)
+        seen, answered, deadline = b"", False, time.time() + 60
+        while time.time() < deadline and select.select([fd], [], [], 60)[0]:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            seen += data
+            if not answered and b"[Y/N]" in seen:
+                os.write(fd, b"y\r")
+                answered = True
+        os.close(fd)
+        os.waitpid(pid, 0)
+        self.assertIn(b"no extra disk space", seen)
+        self.assertEqual(seen.count(b"[Y/N]"), 1)  # no download question afterwards
+        with open(os.path.join(home, "calls")) as f:
+            self.assertIn("create gemma4-26b-lmstudio:latest", f.read())
+        with open(os.path.join(home, "modelfile")) as f:
+            modelfile = f.read()
+        for name, content in (("gemma.gguf", b"weights"), ("mmproj-gemma.gguf", b"projector")):
+            self.assertIn(f'FROM "{os.path.join(models, name)}"', modelfile)
+            with open(os.path.join(blobs, "sha256-" + hashlib.sha256(content).hexdigest()), "rb") as f:
+                self.assertEqual(f.read(), content)
 
     def test_launcher_rejects_unknown_options(self):
         result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), "--frobnicate"],

@@ -2423,7 +2423,8 @@ def show_context():
 
 
 def pretty_model():
-    known = {"gemma-4-26b-a4b-it-qat": "Gemma 4 · 26B", "gemma4:26b": "Gemma 4 · 26B"}
+    known = {"gemma-4-26b-a4b-it-qat": "Gemma 4 · 26B", "gemma4:26b": "Gemma 4 · 26B",
+             "gemma4-26b-lmstudio:latest": "Gemma 4 · 26B"}
     return known.get(MODEL_NAME, MODEL_NAME) + (" · Ollama" if BACKEND == "ollama" else "")
 
 

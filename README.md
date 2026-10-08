@@ -19,11 +19,12 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    `lms` command and the local server that Flashcat uses, and they can be installed side by side.
    Already using **[Ollama](https://ollama.com)**? That works too (Gemma 4 there is `gemma4:26b`). If
    both are installed, Flashcat asks once which one to use and remembers it – change it any time with
-   `flashcat --backend`.
+   `flashcat --backend`. If LM Studio has already downloaded Gemma 4, Ollama does not have to download it
+   again: Flashcat offers to use LM Studio's files (both then share the same data on disk).
 
    I use Flashcat with LM Studio only, and everything runs great there. Ollama works, but it still
-   needs to be tested properly: so far it has only had a few short test runs with a small test model,
-   not with Gemma 4, so I can't say for sure how well it runs. If you use it with Ollama, please
+   needs to be tested properly: so far it has only had a few short test runs (with a small test model
+   and with Gemma 4), so I can't say for sure how well it runs. If you use it with Ollama, please
    [let me know](https://github.com/TomTomsen765/flashcat/issues) how it goes.
 2. Run this in the terminal:
 
@@ -155,7 +156,9 @@ and whenever it changes.
 
 Flashcat uses the port set in LM Studio's server settings (or Ollama's `OLLAMA_HOST`) automatically.
 With Ollama, Flashcat creates a small copy of the model settings with its context size
-(`flashcat-gemma4-26b-64k`, a few bytes – the model itself is not copied).
+(`flashcat-gemma4-26b-64k`, a few bytes – the model itself is not copied). LM Studio's download of
+Gemma 4 appears in Ollama as `gemma4-26b-lmstudio`; on the same disk it takes no extra space, and it stays
+usable if you delete the model in LM Studio later.
 Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
 
 **Troubleshooting:** open LM Studio once, check that the model is downloaded (`flashcat --models`), and close other large apps if answers are slow.

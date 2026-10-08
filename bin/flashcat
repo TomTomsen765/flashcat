@@ -18,7 +18,9 @@ BACKEND_FILE=~/.flashcat/backend  # the model server chosen when both are instal
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
 LMS_MODEL=gemma-4-26b-a4b-it-qat
 LMS_MODEL_URL=https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
+LMS_MODEL_DIR=~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
 OLLAMA_MODEL=gemma4:26b
+OLLAMA_SHARED=gemma4-26b-lmstudio:latest  # Ollama's name for LM Studio's download of the default model
 
 usage() {
   cat <<EOF
@@ -82,13 +84,36 @@ fi
 has_lmstudio() { [[ -x $LMS ]] }
 has_ollama() { (( $+commands[ollama] )) }
 # the default model already downloaded? (checked in the model folders: asking the apps would start them)
-lmstudio_has_model() { [[ -d ~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF ]] }
-ollama_has_model() { [[ -f ${OLLAMA_MODELS:-~/.ollama/models}/manifests/registry.ollama.ai/library/${OLLAMA_MODEL%%:*}/${OLLAMA_MODEL#*:} ]] }
+lmstudio_has_model() { local files=($LMS_MODEL_DIR/*.gguf(N)); (( $#files )) }
+ollama_has_model() {
+  local m
+  for m in $OLLAMA_MODEL $OLLAMA_SHARED; do
+    [[ -f ${OLLAMA_MODELS:-~/.ollama/models}/manifests/registry.ollama.ai/library/${m%%:*}/${m#*:} ]] && return 0
+  done
+  return 1
+}
+
+# Ollama can run the model files LM Studio downloaded. They are cloned into Ollama's store first (an APFS clone
+# needs no extra disk space); where that is not possible, Ollama copies them itself. Prints "shared" or "copied".
+share_lmstudio_model() {
+  local store=${OLLAMA_MODELS:-~/.ollama/models} modelfile file blob how=shared
+  modelfile=$(mktemp)
+  mkdir -p $store/blobs 2>/dev/null
+  for file in $LMS_MODEL_DIR/*.gguf(N); do
+    blob=$store/blobs/sha256-$(shasum -a 256 $file | cut -d' ' -f1)
+    [[ -f $blob ]] || cp -c $file $blob 2>/dev/null || how=copied
+    print -r -- "FROM \"$file\"" >> $modelfile
+  done
+  ollama create $OLLAMA_SHARED -f $modelfile >/dev/null 2>&1 || { rm -f $modelfile; return 1; }
+  rm -f $modelfile
+  print -r -- $how
+}
 
 choose_backend() {  # asks which model server to use and saves the answer; prints the choice
   local l_model="not downloaded yet (15.6 GB)" o_model="not downloaded yet (about 18 GB)" default=1 answer
   lmstudio_has_model && l_model="Gemma 4 downloaded ✓"
-  ollama_has_model && o_model="Gemma 4 downloaded ✓"
+  if ollama_has_model; then o_model="Gemma 4 downloaded ✓"
+  elif lmstudio_has_model; then o_model="can use LM Studio's download of Gemma 4"; fi
   if ! lmstudio_has_model && ollama_has_model; then default=2; fi
   {
     echo "Flashcat can use LM Studio or Ollama – both are installed."
@@ -211,6 +236,27 @@ sys.exit(0 if len(hits) == 1 else 1)' "$2") || {
     exit 1
   }
   shift 2
+fi
+
+# Ollama without its own Gemma 4: use LM Studio's download if there is one
+if [[ $BACKEND == ollama && $MODEL == $OLLAMA_MODEL ]] && ! installed_models | grep -qx -- "$MODEL"; then
+  if installed_models | grep -qx -- "$OLLAMA_SHARED"; then
+    MODEL=$OLLAMA_SHARED
+  elif lmstudio_has_model; then
+    echo "Gemma 4 is not in Ollama yet, but LM Studio has already downloaded it." >&2
+    answer=""
+    [[ -r /dev/tty ]] && read -r "answer?  Use LM Studio's files with Ollama (no download)? [Y/N] " </dev/tty 2>/dev/tty
+    if [[ $answer == [yY]* ]]; then
+      echo "Preparing the model for Ollama (takes about a minute) …" >&2
+      if how=$(share_lmstudio_model); then
+        MODEL=$OLLAMA_SHARED
+        if [[ $how == shared ]]; then echo "Done – both use the same data, no extra disk space." >&2
+        else echo "Done – Ollama keeps its own copy (15.6 GB more on disk)." >&2; fi
+      else
+        echo "That did not work." >&2
+      fi
+    fi
+  fi
 fi
 
 # the default model is missing (e.g. installed with Homebrew): offer the download
