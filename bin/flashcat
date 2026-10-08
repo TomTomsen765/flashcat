@@ -1,26 +1,30 @@
 #!/bin/zsh
 # Flashcat - a local AI assistant in the terminal (named after Flash the cat). Runs a local model through LM Studio
-# (default: Gemma 4 26B) or Ollama and can work with files in the current folder.
+# (default: Gemma 4 26B), Ollama or llama.cpp and can work with files in the current folder.
 # Usage: flashcat [options] ["question"]   (with a question: answers once and exits; input can be piped in)
 # Options: --continue / -c (continue the last chat in this folder), --model / -m <name> (other model, part of the
-#          name is enough), --models (list installed models), --backend [lmstudio|ollama] (choose the model
-#          server when both are installed), --update (install the newest release), --version, --help.
+#          name is enough), --models (list installed models), --backend [lmstudio|ollama|llamacpp] (choose the
+#          model server when several are installed), --update (install the newest release), --version, --help.
 #          Type /help inside the chat for commands.
 # Loads the model if needed. When the last Flashcat window ends (normally or by closing the window), flashcat-cleanup
-# unloads it again and stops what Flashcat started (server, LM Studio background service, Ollama), freeing the RAM.
+# unloads it again and stops what Flashcat started (server, LM Studio background service, Ollama, llama.cpp), freeing the RAM.
 HERE=${0:A:h}  # the folder with flashcat-chat.py and flashcat-cleanup (~/.local/bin, or Homebrew's folder)
 CHAT=$HERE/flashcat-chat.py
 CLEANUP=$HERE/flashcat-cleanup
 REPO=TomTomsen765/flashcat
 LMS=~/.lmstudio/bin/lms
 STATE=~/.flashcat/active
-BACKEND_FILE=~/.flashcat/backend  # the model server chosen when both are installed
+BACKEND_FILE=~/.flashcat/backend  # the model server chosen when several are installed
 SERVICE_PATTERN="/Contents/MacOS/(LM Studio|Bionic) --run-as-service"  # LM Studio is called Bionic in newer versions
 LMS_MODEL=gemma-4-26b-a4b-it-qat
 LMS_MODEL_URL=https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
 LMS_MODEL_DIR=~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF
 OLLAMA_MODEL=gemma4:26b
 OLLAMA_SHARED=gemma4-26b-lmstudio:latest  # Ollama's name for LM Studio's download of the default model
+# llama.cpp runs model files (.gguf) directly: LM Studio's downloads and Flashcat's own folder
+LLAMACPP_MODEL=gemma-4-26B-A4B-it-QAT-Q4_0  # a model's name is its file name without .gguf
+LLAMACPP_FILES=(gemma-4-26B-A4B-it-QAT-Q4_0.gguf mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf)
+LLAMACPP_DIRS=(~/.lmstudio/models ~/.flashcat/models)
 
 usage() {
   cat <<EOF
@@ -34,11 +38,11 @@ Flashcat $(/usr/bin/python3 $CHAT --version | cut -d' ' -f2) – a local AI assi
   -c, --continue              continue the last chat in this folder
   -m, --model <name>          use another model (part of the name is enough)
       --models                list the installed models
-      --backend [name]        choose LM Studio or Ollama (asks without a name)
+      --backend [name]        choose lmstudio, ollama or llamacpp (asks without a name)
       --update                install the newest release
       --version               show the version
 
-Settings: FLASHCAT_BACKEND=lmstudio|ollama, FLASHCAT_CONTEXT=<tokens>, FLASHCAT_AUTOCOMPACT=<0–0.95>,
+Settings: FLASHCAT_BACKEND=lmstudio|ollama|llamacpp, FLASHCAT_CONTEXT=<tokens>, FLASHCAT_AUTOCOMPACT=<0–0.95>,
           FLASHCAT_API_KEY=<key>
 Inside the chat, /help lists the commands.
 EOF
@@ -83,6 +87,19 @@ fi
 
 has_lmstudio() { [[ -x $LMS ]] }
 has_ollama() { (( $+commands[ollama] )) }
+has_llamacpp() { (( $+commands[llama-server] )) }
+has_backend() {
+  case $1 in lmstudio) has_lmstudio ;; ollama) has_ollama ;; llamacpp) has_llamacpp ;; *) return 1 ;; esac
+}
+backend_name() { case $1 in lmstudio) print "LM Studio" ;; ollama) print Ollama ;; llamacpp) print llama.cpp ;; esac }
+backend_site() {
+  case $1 in
+    lmstudio) print https://lmstudio.ai/download ;;
+    ollama)   print https://ollama.com ;;
+    llamacpp) print "https://github.com/ggml-org/llama.cpp (brew install llama.cpp)" ;;
+  esac
+}
+installed_backends() { local b; for b in lmstudio ollama llamacpp; do has_backend $b && print $b; done }
 # the default model already downloaded? (checked in the model folders: asking the apps would start them)
 lmstudio_has_model() { local files=($LMS_MODEL_DIR/*.gguf(N)); (( $#files )) }
 ollama_has_model() {
@@ -109,41 +126,59 @@ share_lmstudio_model() {
   print -r -- $how
 }
 
+
+# llama.cpp: the model files Flashcat can find (not the image parts, "mmproj"), and the path of one by its name
+gguf_files() {
+  local f
+  for f in $^LLAMACPP_DIRS/**/*.gguf(N); do [[ ${f:t:l} == *mmproj* ]] || print -r -- $f; done
+}
+gguf_path() {
+  local f
+  for f in ${(f)"$(gguf_files)"}; do [[ ${f:t:r} == $1 ]] && { print -r -- $f; return 0; }; done
+  return 1
+}
+llamacpp_has_model() { gguf_path $LLAMACPP_MODEL >/dev/null }
+
 choose_backend() {  # asks which model server to use and saves the answer; prints the choice
-  local l_model="not downloaded yet (15.6 GB)" o_model="not downloaded yet (about 18 GB)" default=1 answer
-  lmstudio_has_model && l_model="Gemma 4 downloaded ✓"
-  if ollama_has_model; then o_model="Gemma 4 downloaded ✓"
-  elif lmstudio_has_model; then o_model="can use LM Studio's download of Gemma 4"; fi
-  if ! lmstudio_has_model && ollama_has_model; then default=2; fi
-  {
-    echo "Flashcat can use LM Studio or Ollama – both are installed."
-    echo "  1  LM Studio   $l_model"
-    echo "  2  Ollama      $o_model"
-  } >&2
+  local backends=($(installed_backends)) b note default=1 answer i=0
+  echo "Several model servers are installed – which one should Flashcat use?" >&2
+  for b in $backends; do
+    (( i++ ))
+    case $b in
+      lmstudio) if lmstudio_has_model; then note="Gemma 4 downloaded ✓"; else note="not downloaded yet (15.6 GB)"; fi ;;
+      ollama)   if ollama_has_model; then note="Gemma 4 downloaded ✓"
+                elif lmstudio_has_model; then note="can use LM Studio's download of Gemma 4"
+                else note="not downloaded yet (about 18 GB)"; fi ;;
+      llamacpp) if ! llamacpp_has_model; then note="not downloaded yet (15.6 GB)"
+                elif lmstudio_has_model; then note="uses LM Studio's download of Gemma 4, needs the least memory"
+                else note="Gemma 4 downloaded ✓, needs the least memory"; fi ;;
+    esac
+    # Enter picks the first one that has the model
+    [[ $note == not* ]] && (( default == i && i < $#backends )) && (( default++ ))
+    printf '  %s  %-11s %s\n' $i "$(backend_name $b)" $note >&2
+  done
+  [[ $note == not* ]] && (( default == $#backends )) && default=1
   answer=""
-  [[ -r /dev/tty ]] && read -r "answer?Which one? [1/2, Enter = $default] " </dev/tty 2>/dev/tty
-  case ${answer:-$default} in
-    1|l*|L*) answer=lmstudio ;;
-    2|o*|O*) answer=ollama ;;
-    *) echo "Please answer 1 or 2." >&2; return 1 ;;
-  esac
+  [[ -r /dev/tty ]] && read -r "answer?Which one? [1–$#backends, Enter = $default] " </dev/tty 2>/dev/tty
+  answer=${answer:-$default}
+  if [[ $answer == <1-> ]] && (( answer <= $#backends )); then answer=$backends[answer]
+  elif ! has_backend "$answer"; then echo "Please answer with a number from 1 to $#backends." >&2; return 1; fi
   mkdir -p ~/.flashcat && print -r -- $answer > $BACKEND_FILE
-  echo "Using ${${answer:s/lmstudio/LM Studio}:s/ollama/Ollama} from now on. Change it with: flashcat --backend" >&2
+  echo "Using $(backend_name $answer) from now on. Change it with: flashcat --backend" >&2
   print -r -- $answer
 }
 
 if [[ $1 == --backend ]]; then
   case ${2:-} in
     "")
-      if has_lmstudio && has_ollama; then choose_backend >/dev/null; exit
+      if (( ${#${(f)"$(installed_backends)"}} > 1 )); then choose_backend >/dev/null; exit
       else echo "Only one model server is installed – nothing to choose." >&2; exit 0; fi ;;
-    lmstudio|ollama)
-      if [[ $2 == lmstudio ]] && ! has_lmstudio; then echo "LM Studio is not installed: https://lmstudio.ai/download" >&2; exit 1; fi
-      if [[ $2 == ollama ]] && ! has_ollama; then echo "Ollama is not installed: https://ollama.com" >&2; exit 1; fi
+    lmstudio|ollama|llamacpp)
+      if ! has_backend $2; then echo "$(backend_name $2) is not installed: $(backend_site $2)" >&2; exit 1; fi
       mkdir -p ~/.flashcat && print -r -- $2 > $BACKEND_FILE
-      echo "Flashcat uses ${${2:s/lmstudio/LM Studio}:s/ollama/Ollama} from now on." >&2
+      echo "Flashcat uses $(backend_name $2) from now on." >&2
       exit 0 ;;
-    *) echo "flashcat --backend lmstudio | ollama (or without a name to choose)" >&2; exit 2 ;;
+    *) echo "flashcat --backend lmstudio | ollama | llamacpp (or without a name to choose)" >&2; exit 2 ;;
   esac
 fi
 
@@ -155,21 +190,21 @@ for arg in "$@"; do
   fi
 done
 
-# which model server: FLASHCAT_BACKEND, else the saved choice, else the one that is installed - if both are,
+# which model server: FLASHCAT_BACKEND, else the saved choice, else the one that is installed - if several are,
 # Flashcat asks once (in a terminal) and remembers the answer
 BACKEND=${FLASHCAT_BACKEND:-}
 if [[ -z $BACKEND ]]; then
   saved=""
   [[ -f $BACKEND_FILE ]] && saved=$(<$BACKEND_FILE)
-  if { [[ $saved == lmstudio ]] && has_lmstudio } || { [[ $saved == ollama ]] && has_ollama }; then BACKEND=$saved
-  elif has_lmstudio && has_ollama; then
+  backends=($(installed_backends))
+  if has_backend "$saved"; then BACKEND=$saved
+  elif (( $#backends > 1 )); then
     if [[ -r /dev/tty ]] && [[ -t 0 || -t 2 ]]; then BACKEND=$(choose_backend) || exit 2
-    else BACKEND=lmstudio; fi  # no terminal to ask in: the default
-  elif has_lmstudio; then BACKEND=lmstudio
-  elif has_ollama; then BACKEND=ollama
+    else BACKEND=$backends[1]; fi  # no terminal to ask in: the first one (LM Studio if it is installed)
+  elif (( $#backends )); then BACKEND=$backends[1]
   else
     echo "No model server found. Install LM Studio (https://lmstudio.ai/download) or Ollama (https://ollama.com)," >&2
-    echo "open it once, then start flashcat again." >&2
+    echo "open it once, then start flashcat again. (llama.cpp works too: brew install llama.cpp)" >&2
     exit 1
   fi
 fi
@@ -178,7 +213,9 @@ case $BACKEND in
             MODEL=$LMS_MODEL ;;
   ollama)   (( $+commands[ollama] )) || { echo "Ollama was not found. Install it from https://ollama.com" >&2; exit 1; }
             MODEL=$OLLAMA_MODEL ;;
-  *)        echo "FLASHCAT_BACKEND must be lmstudio or ollama." >&2; exit 2 ;;
+  llamacpp) has_llamacpp || { echo "llama.cpp was not found (llama-server). Install it with: brew install llama.cpp" >&2; exit 1; }
+            MODEL=$LLAMACPP_MODEL ;;
+  *)        echo "FLASHCAT_BACKEND must be lmstudio, ollama or llamacpp." >&2; exit 2 ;;
 esac
 export FLASHCAT_BACKEND=$BACKEND
 if [[ $BACKEND == ollama ]]; then
@@ -202,7 +239,7 @@ if [[ $BACKEND == lmstudio ]]; then
   if ! pgrep -f "$SERVICE_PATTERN" >/dev/null && ! pgrep -xq "LM Studio|Bionic"; then
     touch $STATE/service
   fi
-elif ! ollama list >/dev/null 2>&1; then
+elif [[ $BACKEND == ollama ]] && ! ollama list >/dev/null 2>&1; then
   ollama serve >~/.flashcat/ollama.log 2>&1 &
   print -r -- $! > $STATE/ollama-server
   for i in {1..50}; do ollama list >/dev/null 2>&1 && break; sleep 0.2; done
@@ -211,13 +248,18 @@ fi
 installed_models() {
   if [[ $BACKEND == lmstudio ]]; then
     $LMS ls --llm --json 2>/dev/null | /usr/bin/python3 -c 'import json, sys; print("\n".join(m["modelKey"] for m in json.load(sys.stdin)))'
+  elif [[ $BACKEND == llamacpp ]]; then
+    local f; for f in ${(f)"$(gguf_files)"}; do print -r -- ${f:t:r}; done
   else
     ollama list 2>/dev/null | awk 'NR > 1 && $1 !~ /^flashcat-/ {print $1}'
   fi
 }
 
 if [[ $1 == --models ]]; then
-  if [[ $BACKEND == lmstudio ]]; then $LMS ls --llm 2>/dev/null; else ollama list 2>/dev/null | grep -v '^flashcat-'; fi
+  if [[ $BACKEND == lmstudio ]]; then $LMS ls --llm 2>/dev/null
+  elif [[ $BACKEND == llamacpp ]]; then
+    for f in ${(f)"$(gguf_files)"}; do printf '%-50s %5.1f GB  %s\n' ${f:t:r} $(( $(stat -f %z $f) / 1e9 )) ${${f:h}/#$HOME/\~}; done
+  else ollama list 2>/dev/null | grep -v '^flashcat-'; fi
   $CLEANUP $$
   exit
 fi
@@ -259,10 +301,24 @@ if [[ $BACKEND == ollama && $MODEL == $OLLAMA_MODEL ]] && ! installed_models | g
   fi
 fi
 
+# llama.cpp has no download command for a known place, so Flashcat fetches the model's files itself (the same
+# ones LM Studio downloads); a download that broke off continues where it stopped
+download_gguf() {
+  local dir=~/.flashcat/models/${LMS_MODEL_URL:t} f
+  mkdir -p $dir || return 1
+  for f in $LLAMACPP_FILES; do
+    [[ -f $dir/$f ]] && continue
+    curl --proto '=https' --tlsv1.2 -fL -C - --progress-bar -o $dir/$f.part $LMS_MODEL_URL/resolve/main/$f || return 1
+    mv $dir/$f.part $dir/$f
+  done
+}
+
 # the default model is missing (e.g. installed with Homebrew): offer the download
 if ! installed_models | grep -qx -- "$MODEL"; then
   if [[ $BACKEND == lmstudio ]]; then
     size="15.6 GB"; hint="$LMS get $LMS_MODEL_URL"; get=($LMS get $LMS_MODEL_URL -y)
+  elif [[ $BACKEND == llamacpp ]]; then
+    size="15.6 GB, saved in ~/.flashcat/models"; hint="flashcat (it asks again)"; get=(download_gguf)
   else
     size="about 18 GB"; hint="ollama pull $MODEL"; get=(ollama pull $MODEL)
   fi
@@ -318,6 +374,29 @@ if [[ $BACKEND == lmstudio ]]; then
     fi
     grep -qx "$MODEL" $STATE/loaded 2>/dev/null || print -r -- "$MODEL" >> $STATE/loaded
   fi
+elif [[ $BACKEND == llamacpp ]]; then
+  # one llama-server per model, started here and stopped by the cleanup: $STATE/llamacpp holds pid, port and model
+  llama_fail() { echo "$1" >&2; kill $watchdog_pid 2>/dev/null; $CLEANUP $$; exit 1 }
+  running=(${(f)"$(cat $STATE/llamacpp 2>/dev/null)"})
+  if (( $#running == 3 )) && [[ $(ps -p $running[1] -o comm= 2>/dev/null) == *llama-server ]]; then
+    [[ $running[3] == $MODEL ]] || llama_fail "Another Flashcat window is using $running[3] – llama.cpp runs one model at a time. Close it first."
+    export FLASHCAT_PORT=$running[2]
+  else
+    file=$(gguf_path $MODEL) || llama_fail "The model file for $MODEL was not found."
+    image_part=($file:h/*mmproj*.gguf(N))
+    export FLASHCAT_PORT=$(/usr/bin/python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    echo "Loading $MODEL …" >&2
+    # only on this Mac (127.0.0.1), never online (--offline), one chat at a time with the whole context
+    nohup llama-server -m $file ${image_part:+--mmproj} ${image_part[1]:-} -c $FLASHCAT_CONTEXT -np 1 --alias $MODEL \
+      --host 127.0.0.1 --port $FLASHCAT_PORT --offline --no-webui </dev/null >~/.flashcat/llama-server.log 2>&1 &!
+    print -r -l -- $! $FLASHCAT_PORT $MODEL > $STATE/llamacpp
+  fi
+  for i in {1..600}; do
+    curl -fs -m 2 http://127.0.0.1:$FLASHCAT_PORT/health >/dev/null 2>&1 && break
+    kill -0 ${$(<$STATE/llamacpp)[1]} 2>/dev/null || llama_fail "Loading failed (details: ~/.flashcat/llama-server.log)."
+    (( i == 600 )) && llama_fail "Loading took too long (details: ~/.flashcat/llama-server.log)."
+    sleep 0.5
+  done
 else
   export FLASHCAT_PORT=$OLLAMA_PORT
   # Ollama's OpenAI interface has no context setting, so Flashcat uses a copy of the model with its context size

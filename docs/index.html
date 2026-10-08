@@ -6,7 +6,7 @@
 <title>Flashcat – a local AI assistant for your Mac terminal</title>
 <meta name="description" content="Flashcat is a private, offline AI assistant for the macOS terminal. It reads and writes files, PDFs, Word and Excel, looks at images and searches the web – with a model that runs on your own Mac.">
 <meta property="og:title" content="Flashcat – a local AI assistant for your Mac terminal">
-<meta property="og:description" content="Private and offline: a local LLM (Gemma 4) through LM Studio or Ollama, right in your terminal. Free and open source.">
+<meta property="og:description" content="Private and offline: a local LLM (Gemma 4) through LM Studio, Ollama or llama.cpp, right in your terminal. Free and open source.">
 <meta property="og:image" content="https://tomtomsen765.github.io/flashcat/social-preview.png">
 <meta property="og:url" content="https://tomtomsen765.github.io/flashcat/">
 <meta name="twitter:card" content="summary_large_image">
@@ -285,7 +285,7 @@
         <p class="label">NAME</p>
         <h1><span class="star" aria-hidden="true">✻</span> flashcat</h1>
         <p class="tagline">— a local AI assistant for your Mac terminal. Private. Offline. Yours.</p>
-        <p class="meta">PDF · Word · Excel  /  LM Studio · Ollama  /  Gemma 4  /  Apple Silicon  /  free &amp; open source</p>
+        <p class="meta">PDF · Word · Excel  /  LM Studio · Ollama · llama.cpp  /  Gemma 4  /  Apple Silicon  /  free &amp; open source</p>
         <div class="cta">
           <a class="btn primary" href="#install">$ install flashcat</a>
           <a class="btn ghost" href="#synopsis">▶ watch it work</a>
@@ -370,7 +370,7 @@
         <ol class="rules">
           <li><strong>[Y/N]  every change asks first</strong><span>You see a preview – or the full command – before you answer <code>Y</code>. The old version is backed up, and <code>/undo</code> reverts the last change.</span></li>
           <li><strong>[sandbox]  commands stay in their box</strong><span>Only the start folder and its subfolders. Commands run in a sandbox: no internet, they can only write inside the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone. Only an image you drag or paste in yourself comes from outside.</span></li>
-          <li><strong>[offline]  stays on your Mac</strong><span>The model runs locally in LM Studio or Ollama. Nothing leaves your computer unless you allow a web request – and you always see the full address first.</span></li>
+          <li><strong>[offline]  stays on your Mac</strong><span>The model runs locally in LM Studio, Ollama or llama.cpp. Nothing leaves your computer unless you allow a web request – and you always see the full address first.</span></li>
         </ol>
       </div>
       <p class="note">All details: <a href="https://github.com/TomTomsen765/flashcat#safety">Safety in the README</a> and <a href="https://github.com/TomTomsen765/flashcat/blob/main/SECURITY.md">SECURITY.md</a>. Flashcat is powered by a language model – please double-check important results.</p>
@@ -401,7 +401,7 @@
     <div class="sec-body">
       <p class="big">Three steps. No account, no cloud.</p>
       <ol class="steps">
-        <li><span class="n">1</span><div class="s"><p>Install <a href="https://lmstudio.ai/download">LM Studio</a> or <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> (or <a href="https://ollama.com">Ollama</a>) and open it once.</p></div></li>
+        <li><span class="n">1</span><div class="s"><p>Install <a href="https://lmstudio.ai/download">LM Studio</a> or <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> (or <a href="https://ollama.com">Ollama</a>, or <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a>) and open it once.</p></div></li>
         <li><span class="n">2</span><div class="s">
           <p>Run this in the terminal:</p>
           <div class="shell">

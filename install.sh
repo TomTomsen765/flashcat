@@ -5,8 +5,8 @@
 #
 # (That address is the copy of this file attached to the newest release.)
 # Installs the newest release of flashcat into ~/.local/bin and downloads the default model (Gemma 4 26B,
-# ~15.6 GB) through LM Studio (or Ollama). LM Studio, LM Studio Bionic (https://lmstudio.ai/download) or
-# Ollama (https://ollama.com) must be installed first.
+# ~15.6 GB) through LM Studio (or Ollama). LM Studio, LM Studio Bionic (https://lmstudio.ai/download),
+# Ollama (https://ollama.com) or llama.cpp (brew install llama.cpp) must be installed first.
 # Options (environment variables): FLASHCAT_SKIP_MODEL=1 skips the model download,
 #   FLASHCAT_REF=<tag or branch> installs that version instead of the newest release.
 { # everything in braces: bash reads it completely before running it, so a download that
@@ -16,6 +16,7 @@ set -euo pipefail
 REPO="TomTomsen765/flashcat"
 MODEL_KEY="gemma-4-26b-a4b-it-qat"
 OLLAMA_MODEL="gemma4:26b"
+LLAMACPP_FILE="gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
 MODEL_URL="https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF"
 BIN="$HOME/.local/bin"
 LMS="$HOME/.lmstudio/bin/lms"
@@ -85,9 +86,13 @@ if [[ -x $LMS ]]; then
 elif command -v ollama >/dev/null 2>&1; then
   backend=ollama
   ok "Ollama"
+elif command -v llama-server >/dev/null 2>&1; then
+  backend=llamacpp
+  ok "llama.cpp"
 else
   fail "No model server found. Install LM Studio or LM Studio Bionic from ${BOLD}https://lmstudio.ai/download${RESET}
-    (or Ollama from ${BOLD}https://ollama.com${RESET}), open it once, then run this installer again."
+    (or Ollama from ${BOLD}https://ollama.com${RESET}, or llama.cpp with: brew install llama.cpp), open it once,
+    then run this installer again."
 fi
 
 # ---------- program files ----------
@@ -154,7 +159,13 @@ fi
 step "Model"
 service_running_before=1
 pgrep -f "$SERVICE_PATTERN" >/dev/null || pgrep -xq "LM Studio|Bionic" || service_running_before=
-if [[ $backend == ollama ]]; then
+if [[ $backend == llamacpp ]]; then
+  if [[ -n $(find "$HOME/.lmstudio/models" "$HOME/.flashcat/models" -name "$LLAMACPP_FILE" 2>/dev/null | head -1) ]]; then
+    ok "Gemma 4 26B is already downloaded"
+  else
+    note "Gemma 4 26B (about 15.6 GB) is not downloaded yet – flashcat offers it on the first start."
+  fi
+elif [[ $backend == ollama ]]; then
   if ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
     ok "Gemma 4 26B is already downloaded"
   elif [[ ${FLASHCAT_SKIP_MODEL:-} == 1 ]]; then

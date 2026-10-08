@@ -6,7 +6,7 @@ Named after Flash the cat.
 Tools: list, read (text/PDF/Word/Excel, scans via macOS text recognition), search, write + edit (text
 files), write Word and PDF documents, move/rename, view images, run commands (in a sandbox), fetch web pages,
 web search. Every change is confirmed by the user, backed up and can be undone with /undo. File access is limited
-to the folder the chat was started in. Talks to the OpenAI-compatible server of LM Studio or Ollama on localhost
+to the folder the chat was started in. Talks to the OpenAI-compatible server of LM Studio, Ollama or llama.cpp on localhost
 (port from FLASHCAT_PORT). Stdlib only.
 
 Usage: flashcat-chat.py MODEL [--continue] [QUESTION …]
@@ -49,8 +49,8 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.4.3"
-BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio" or "ollama", chosen by the launcher
+VERSION = "1.5.0"
+BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio", "ollama" or "llamacpp", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
 URL = SERVER + "/v1/chat/completions"
@@ -1706,6 +1706,12 @@ def loaded_context_length():
             return int(os.environ.get("FLASHCAT_CONTEXT") or 32768)
         except ValueError:
             return 32768
+    if BACKEND == "llamacpp":
+        try:
+            with urllib.request.urlopen(f"{SERVER}/props", timeout=5) as r:
+                return int(json.load(r)["default_generation_settings"]["n_ctx"])
+        except Exception:
+            return 32768
     try:
         with urllib.request.urlopen(f"{SERVER}/api/v0/models/{MODEL}", timeout=5) as r:
             return int(json.load(r).get("loaded_context_length") or 32768)
@@ -2424,8 +2430,8 @@ def show_context():
 
 def pretty_model():
     known = {"gemma-4-26b-a4b-it-qat": "Gemma 4 · 26B", "gemma4:26b": "Gemma 4 · 26B",
-             "gemma4-26b-lmstudio:latest": "Gemma 4 · 26B"}
-    return known.get(MODEL_NAME, MODEL_NAME) + (" · Ollama" if BACKEND == "ollama" else "")
+             "gemma4-26b-lmstudio:latest": "Gemma 4 · 26B", "gemma-4-26B-A4B-it-QAT-Q4_0": "Gemma 4 · 26B"}
+    return known.get(MODEL_NAME, MODEL_NAME) + {"ollama": " · Ollama", "llamacpp": " · llama.cpp"}.get(BACKEND, "")
 
 
 def start_card(loaded, sessions_count):
@@ -2821,7 +2827,7 @@ def switch_model(want):
     """/model: lists the installed models, or loads another one for this chat (the chat itself stays)."""
     global MODEL, MODEL_NAME
     if BACKEND != "lmstudio":
-        print("Changing the model inside the chat works with LM Studio only. With Ollama: /exit, then\n"
+        print("Changing the model inside the chat works with LM Studio only. Otherwise: /exit, then\n"
               "flashcat --continue --model <name>\n")
         return
     keys = installed_models()

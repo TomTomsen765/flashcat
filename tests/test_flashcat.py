@@ -1072,11 +1072,12 @@ class CommandLineTest(unittest.TestCase):
             result = subprocess.run([shell, "-n", os.path.join(REPO, script)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, f"{script}: {result.stderr}")
 
-    def launcher(self, home, *args, lmstudio=True, ollama=True):
-        """Runs bin/flashcat with a fake home folder; LM Studio and Ollama are stand-in scripts."""
+    def launcher(self, home, *args, lmstudio=True, ollama=True, llamacpp=True):
+        """Runs bin/flashcat with a fake home folder; LM Studio, Ollama and llama.cpp are stand-in scripts."""
         fake_bin = os.path.join(home, "fake-bin")
         os.makedirs(fake_bin, exist_ok=True)
-        stubs = [(os.path.join(home, ".lmstudio", "bin", "lms"), lmstudio), (os.path.join(fake_bin, "ollama"), ollama)]
+        stubs = [(os.path.join(home, ".lmstudio", "bin", "lms"), lmstudio), (os.path.join(fake_bin, "ollama"), ollama),
+                 (os.path.join(fake_bin, "llama-server"), llamacpp)]
         for path, present in stubs:
             if present:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1094,7 +1095,7 @@ class CommandLineTest(unittest.TestCase):
         home = tempfile.mkdtemp(dir=BASE)
         self.addCleanup(shutil.rmtree, home, True)
         saved = os.path.join(home, ".flashcat", "backend")
-        for name in ("ollama", "lmstudio"):
+        for name in ("ollama", "llamacpp", "lmstudio"):
             result = self.launcher(home, "--backend", name)
             self.assertEqual(result.returncode, 0, result.stderr)
             with open(saved) as f:
@@ -1162,6 +1163,50 @@ class CommandLineTest(unittest.TestCase):
             self.assertIn(f'FROM "{os.path.join(models, name)}"', modelfile)
             with open(os.path.join(blobs, "sha256-" + hashlib.sha256(content).hexdigest()), "rb") as f:
                 self.assertEqual(f.read(), content)
+
+    def test_llamacpp_server_stays_on_this_mac(self):
+        """llama.cpp is started for this Mac only and offline, with the model files LM Studio downloaded."""
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        fake_bin, work = os.path.join(home, "fake-bin"), os.path.join(home, "work")
+        models = os.path.join(home, ".lmstudio", "models", "lmstudio-community", "gemma-4-26B-A4B-it-QAT-GGUF")
+        for folder in (fake_bin, work, models):
+            os.makedirs(folder)
+        for name in ("gemma-4-26B-A4B-it-QAT-Q4_0.gguf", "mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"):
+            with open(os.path.join(models, name), "wb") as f:
+                f.write(b"x")
+        with open(os.path.join(fake_bin, "llama-server"), "w") as f:  # stand-in: notes its arguments and ends
+            f.write('#!/bin/sh\necho "$@" > "$HOME/args"\n')
+        os.chmod(os.path.join(fake_bin, "llama-server"), 0o755)
+        env = {"HOME": home, "PATH": f"{fake_bin}:/usr/bin:/bin", "FLASHCAT_BACKEND": "llamacpp"}
+        result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat")], capture_output=True, text=True, env=env,
+                                cwd=work, stdin=subprocess.DEVNULL, start_new_session=True, timeout=60)
+        self.assertIn("Loading failed", result.stderr)
+        with open(os.path.join(home, "args")) as f:
+            args = f.read().split()
+        self.assertEqual(args[args.index("--host") + 1], "127.0.0.1")
+        self.assertIn("--offline", args)
+        self.assertEqual(args[args.index("-m") + 1], os.path.join(models, "gemma-4-26B-A4B-it-QAT-Q4_0.gguf"))
+        self.assertEqual(args[args.index("--mmproj") + 1], os.path.join(models, "mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"))
+        self.assertFalse(os.path.exists(os.path.join(home, ".flashcat", "active", "llamacpp")))
+
+    def test_cleanup_stops_only_its_own_llamacpp_server(self):
+        """The noted process number may belong to another program by now: that one is left alone."""
+        os.makedirs(BASE, exist_ok=True)
+        home = tempfile.mkdtemp(dir=BASE)
+        self.addCleanup(shutil.rmtree, home, True)
+        active = os.path.join(home, ".flashcat", "active")
+        os.makedirs(active)
+        other = subprocess.Popen(["/bin/sleep", "30"])
+        self.addCleanup(other.kill)
+        with open(os.path.join(active, "llamacpp"), "w") as f:
+            f.write(f"{other.pid}\n12345\nsome-model\n")
+        subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat-cleanup"), "1"], env={"HOME": home, "PATH": "/usr/bin:/bin"},
+                       capture_output=True, timeout=30)
+        self.assertFalse(os.path.exists(os.path.join(active, "llamacpp")))
+        time.sleep(0.3)
+        self.assertIsNone(other.poll())
 
     def test_launcher_rejects_unknown_options(self):
         result = subprocess.run(["zsh", os.path.join(REPO, "bin", "flashcat"), "--frobnicate"],

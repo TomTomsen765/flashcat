@@ -22,8 +22,9 @@ if command -v ollama >/dev/null 2>&1; then  # Flashcat's small model settings co
 fi
 
 if [[ -d $HOME/.flashcat ]]; then
-  answer=""
-  [[ -r /dev/tty ]] && read -r -p "  ${ORANGE}?${RESET} Also delete saved chats and settings in ~/.flashcat? ${DIM}[Y/N]${RESET} " answer </dev/tty || true
+  answer="" what="saved chats and settings"
+  [[ -d $HOME/.flashcat/models ]] && what="saved chats, settings and downloaded models"
+  [[ -r /dev/tty ]] && read -r -p "  ${ORANGE}?${RESET} Also delete $what in ~/.flashcat? ${DIM}[Y/N]${RESET} " answer </dev/tty || true
   if [[ $answer == [yY]* ]]; then
     rm -rf "$HOME/.flashcat"
     printf '  %s✓%s ~/.flashcat deleted\n' "$GREEN" "$RESET"

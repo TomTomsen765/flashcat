@@ -4,8 +4,8 @@
 
 **A local AI assistant for the macOS terminal.** Flashcat chats with you, reads and writes files in the
 folder you start it in, looks at images, reads PDFs, Word and Excel files (even scans), and can search
-the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai), LM Studio Bionic
-or [Ollama](https://ollama.com).
+the web — all with a model that runs **on your own Mac** through [LM Studio](https://lmstudio.ai), LM Studio Bionic,
+[Ollama](https://ollama.com) or [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Nothing you ask leaves your computer unless you allow a web request: a private, offline AI chat for your
 MacBook, powered by a local LLM (Google Gemma 4).
 
@@ -18,13 +18,19 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
    [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
    `lms` command and the local server that Flashcat uses, and they can be installed side by side.
    Already using **[Ollama](https://ollama.com)**? That works too (Gemma 4 there is `gemma4:26b`). If
-   both are installed, Flashcat asks once which one to use and remembers it – change it any time with
+   several are installed, Flashcat asks once which one to use and remembers it – change it any time with
    `flashcat --backend`. If LM Studio has already downloaded Gemma 4, Ollama does not have to download it
    again: Flashcat offers to use LM Studio's files (both then share the same data on disk).
 
+   Short on memory? **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (`brew install llama.cpp`) is the
+   leanest way: no app, only the bare model server, which Flashcat starts and stops itself. It runs the model
+   files LM Studio downloaded directly (or Flashcat downloads them into `~/.flashcat/models`). On my
+   MacBook Air M5 it needed about 1 GB less memory than through LM Studio and answered a bit faster (one short
+   measurement, same model and questions). Choose it with `flashcat --backend llamacpp`.
+
    I use Flashcat with LM Studio only, and everything runs great there. Ollama works, but it still
    needs to be tested properly: so far it has only had a few short test runs (with a small test model
-   and with Gemma 4), so I can't say for sure how well it runs. If you use it with Ollama, please
+   and with Gemma 4), and so has llama.cpp, so I can't say for sure how well they run. If you use it with Ollama, please
    [let me know](https://github.com/TomTomsen765/flashcat/issues) how it goes.
 2. Run this in the terminal:
 
@@ -68,7 +74,8 @@ What the installer changes on your Mac, and nothing else:
 - adds `~/.local/bin` to your `PATH` in `~/.zshrc`, if it isn't there yet
 - installs the Python package `pygments` for colored code (`pip install --user`, optional) – one fixed
   version, and only if the downloaded file has the checksum written in the installer
-- downloads the model through LM Studio or Ollama (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
+- downloads the model through LM Studio or Ollama (with llama.cpp, Flashcat offers the download on its
+  first start; skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
 
 Flashcat itself is one Python file using only the standard library
 ([`bin/flashcat-chat.py`](bin/flashcat-chat.py)) and a short launcher ([`bin/flashcat`](bin/flashcat)).
@@ -130,7 +137,7 @@ Then just talk to it:
 | drag an image in | drag an image from Finder into the terminal – the long path turns into `📎[Image #1: name]`; also works for images outside the folder |
 
 Start options: `flashcat --continue` (last chat), `flashcat --models`, `flashcat --model <name>`,
-`flashcat --backend` (LM Studio or Ollama), `flashcat --update`, `flashcat --version`, `flashcat --help`.
+`flashcat --backend` (LM Studio, Ollama or llama.cpp), `flashcat --update`, `flashcat --version`, `flashcat --help`.
 
 **Ask once, without a chat:** give the question as an argument. Input you pipe in is attached to it,
 and when the output goes to a file or another program, only the answer is written there:
@@ -152,13 +159,16 @@ and whenever it changes.
 | `FLASHCAT_CONTEXT` | context size in tokens – default 65536 on Macs with 24 GB or more, 16384 below |
 | `FLASHCAT_AUTOCOMPACT` | share of the context at which the chat is summarized by itself – default `0.8`, `0` switches it off |
 | `FLASHCAT_API_KEY` | only needed if you turned on *Require authentication* in LM Studio's server settings |
-| `FLASHCAT_BACKEND` | `lmstudio` or `ollama` for this start – otherwise the one that is installed, or your choice from `flashcat --backend` when both are |
+| `FLASHCAT_BACKEND` | `lmstudio`, `ollama` or `llamacpp` for this start – otherwise the one that is installed, or your choice from `flashcat --backend` when several are |
 
 Flashcat uses the port set in LM Studio's server settings (or Ollama's `OLLAMA_HOST`) automatically.
 With Ollama, Flashcat creates a small copy of the model settings with its context size
 (`flashcat-gemma4-26b-64k`, a few bytes – the model itself is not copied). LM Studio's download of
 Gemma 4 appears in Ollama as `gemma4-26b-lmstudio`; on the same disk it takes no extra space, and it stays
 usable if you delete the model in LM Studio later.
+With llama.cpp, Flashcat starts `llama-server` for this Mac only (`127.0.0.1`, a free port, `--offline`) and
+stops it when the last window closes; `flashcat --models` lists the model files it finds in LM Studio's
+folder and in `~/.flashcat/models`. Its log is `~/.flashcat/llama-server.log`.
 Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lists them).
 
 **Troubleshooting:** open LM Studio once, check that the model is downloaded (`flashcat --models`), and close other large apps if answers are slow.
@@ -247,7 +257,7 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   allow it – and again whenever it changes.
 
 **Your data stays on your Mac**
-- The model runs locally in LM Studio or Ollama. Chats are stored only in `~/.flashcat`, readable only by
+- The model runs locally in LM Studio, Ollama or llama.cpp. Chats are stored only in `~/.flashcat`, readable only by
   your user account. The model is unloaded again when the last Flashcat window closes, so the memory is freed.
 
 **Installing and updating**

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # "Last one out turns off the lights": called when a Flashcat session ends (normally or when its window is closed).
-# Unloads the model, stops the server and the LM Studio background service (or Ollama) - but only if Flashcat
+# Unloads the model, stops the server and the LM Studio background service (or Ollama, llama.cpp) - but only if Flashcat
 # started them and no other Flashcat session is still running.
 # Usage: flashcat-cleanup [-v] <pid of the ending Flashcat session>
 LMS=~/.lmstudio/bin/lms
@@ -34,6 +34,13 @@ fi
 if [[ -f $STATE/ollama-server ]]; then
   kill $(<$STATE/ollama-server) 2>/dev/null && say "Ollama stopped."
   rm -f $STATE/ollama-server
+fi
+if [[ -f $STATE/llamacpp ]]; then
+  llama=(${(f)"$(<$STATE/llamacpp)"})  # pid, port, model - the pid may belong to something else by now
+  if [[ $(ps -p ${llama[1]:-0} -o comm= 2>/dev/null) == *llama-server ]]; then
+    kill $llama[1] 2>/dev/null && say "$llama[3] unloaded, llama.cpp stopped."
+  fi
+  rm -f $STATE/llamacpp
 fi
 if [[ -f $STATE/server ]]; then
   $LMS server stop >/dev/null 2>&1 && say "LM Studio server stopped."

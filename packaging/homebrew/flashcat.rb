@@ -2,9 +2,9 @@
 # (Formula/flashcat.rb); update url and sha256 there for every release:
 #   curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
 class Flashcat < Formula
-  desc "Local AI assistant for the macOS terminal (LM Studio or Ollama)"
+  desc "Local AI assistant for the macOS terminal (LM Studio, Ollama or llama.cpp)"
   homepage "https://tomtomsen765.github.io/flashcat/"
-  url "https://github.com/TomTomsen765/flashcat/archive/refs/tags/v1.4.3.tar.gz"
+  url "https://github.com/TomTomsen765/flashcat/archive/refs/tags/v1.5.0.tar.gz"
   sha256 "REPLACE_WITH_SHA256_OF_THE_RELEASE_TARBALL"
   license "MIT"
 
@@ -17,7 +17,7 @@ class Flashcat < Formula
 
   def caveats
     <<~EOS
-      Flashcat needs a local model server: LM Studio (https://lmstudio.ai/download) or Ollama.
+      Flashcat needs a local model server: LM Studio (https://lmstudio.ai/download), Ollama or llama.cpp.
       Open it once, then start Flashcat in a project folder:
         cd ~/Documents/my-project && flashcat
       The first start offers to download the default model, Gemma 4 26B (about 16 GB).

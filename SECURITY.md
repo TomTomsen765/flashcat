@@ -96,7 +96,8 @@ own code, whatever the model asks for.
   outside the folder are ignored.
 
 **Your data**
-- The model runs locally in LM Studio; Flashcat talks to it on `localhost` only.
+- The model runs locally in LM Studio, Ollama or llama.cpp; Flashcat talks to it on `localhost` only. It starts
+  llama.cpp's server for this Mac only (`127.0.0.1`) and with `--offline`.
 - Chats and settings are stored in `~/.flashcat`, readable only by your user account.
 
 **Installer**
