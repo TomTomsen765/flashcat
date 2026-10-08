@@ -140,24 +140,25 @@ gguf_path() {
 llamacpp_has_model() { gguf_path $LLAMACPP_MODEL >/dev/null }
 
 choose_backend() {  # asks which model server to use and saves the answer; prints the choice
-  local backends=($(installed_backends)) b note default=1 answer i=0
+  local backends=($(installed_backends)) b note default=0 answer i=0
   echo "Several model servers are installed – which one should Flashcat use?" >&2
   for b in $backends; do
     (( i++ ))
     case $b in
-      lmstudio) if lmstudio_has_model; then note="Gemma 4 downloaded ✓"; else note="not downloaded yet (15.6 GB)"; fi ;;
+      lmstudio) if lmstudio_has_model; then note="Gemma 4 downloaded ✓"; else note="Gemma 4 not downloaded yet (15.6 GB)"; fi ;;
       ollama)   if ollama_has_model; then note="Gemma 4 downloaded ✓"
                 elif lmstudio_has_model; then note="can use LM Studio's download of Gemma 4"
-                else note="not downloaded yet (about 18 GB)"; fi ;;
-      llamacpp) if ! llamacpp_has_model; then note="not downloaded yet (15.6 GB)"
-                elif lmstudio_has_model; then note="uses LM Studio's download of Gemma 4, needs the least memory"
-                else note="Gemma 4 downloaded ✓, needs the least memory"; fi ;;
+                else note="Gemma 4 not downloaded yet (about 18 GB)"; fi ;;
+      llamacpp) if ! llamacpp_has_model; then note="Gemma 4 not downloaded yet (15.6 GB)"
+                elif lmstudio_has_model; then note="uses LM Studio's download of Gemma 4"
+                else note="Gemma 4 downloaded ✓"; fi
+                note="recommended: the fastest, needs the least memory · $note" ;;
     esac
-    # Enter picks the first one that has the model
-    [[ $note == not* ]] && (( default == i && i < $#backends )) && (( default++ ))
+    # Enter picks llama.cpp, else the first one that has the model
+    if [[ $b == llamacpp ]]; then default=$i; elif (( ! default )) && [[ $note != *not\ downloaded* ]]; then default=$i; fi
     printf '  %s  %-11s %s\n' $i "$(backend_name $b)" $note >&2
   done
-  [[ $note == not* ]] && (( default == $#backends )) && default=1
+  (( default )) || default=1
   answer=""
   [[ -r /dev/tty ]] && read -r "answer?Which one? [1–$#backends, Enter = $default] " </dev/tty 2>/dev/tty
   answer=${answer:-$default}
@@ -328,6 +329,7 @@ if ! installed_models | grep -qx -- "$MODEL"; then
   [[ -r /dev/tty ]] && read -r "answer?  Download it now? [Y/N] " </dev/tty 2>/dev/tty
   if [[ $answer != [yY]* ]]; then
     echo "Download it later with:  $hint" >&2
+    [[ $BACKEND == llamacpp ]] && echo "Or use another model: put its .gguf file into ~/.flashcat/models and start with: flashcat --model <name>" >&2
     $CLEANUP $$
     exit 1
   fi

@@ -13,27 +13,29 @@ Named after Flash, my cat. 🐈 **Website:** [tomtomsen765.github.io/flashcat](h
 
 ## Install
 
-1. Install **[LM Studio](https://lmstudio.ai/download)** or its newer agent app
-   **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** (both on the
-   [download page](https://lmstudio.ai/download)) and open it once. Either one works: both bring the
-   `lms` command and the local server that Flashcat uses, and they can be installed side by side.
-   LM Studio's version without a window (`llmster`) works as well.
-   Already using **[Ollama](https://ollama.com)**? That works too (Gemma 4 there is `gemma4:26b`). If
-   several are installed, the installer asks once which one to use and remembers it – change it any time with
-   `flashcat --backend`. If none is installed, the installer explains the three and, if you have Homebrew,
-   offers to install llama.cpp for you. If LM Studio has already downloaded Gemma 4, Ollama does not have to download it
-   again: Flashcat offers to use LM Studio's files (both then share the same data on disk).
+1. Flashcat needs a program that runs the model on your Mac. Three work:
+   - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** – recommended: the fastest, and it needs the
+     least memory. No app, only the bare model server, which Flashcat starts and stops itself. You don't
+     have to install it first: if you have [Homebrew](https://brew.sh), the installer offers to do it
+     (`brew install llama.cpp`).
+   - **[LM Studio](https://lmstudio.ai/download)** or its newer agent app
+     **[LM Studio Bionic](https://lmstudio.ai/blog/introducing-lm-studio-bionic)** – an app with a window to
+     try and manage models; open it once after installing. Its version without a window (`llmster`) works too.
+   - **[Ollama](https://ollama.com)** – a small app in the menu bar (Gemma 4 there is `gemma4:26b`).
 
-   Short on memory? **[llama.cpp](https://github.com/ggml-org/llama.cpp)** (`brew install llama.cpp`) is the
-   leanest way: no app, only the bare model server, which Flashcat starts and stops itself. It runs the model
-   files LM Studio downloaded directly (or Flashcat downloads them into `~/.flashcat/models`). On my
-   MacBook Air M5 it needed about 1 GB less memory than through LM Studio and answered a bit faster (one short
-   measurement, same model and questions). Choose it with `flashcat --backend llamacpp`.
+   If several are installed, the installer asks once which one to use (Enter picks llama.cpp) and remembers
+   it – change it any time with `flashcat --backend`. A model that LM Studio has already downloaded is not
+   downloaded again: llama.cpp runs LM Studio's files directly, and Ollama can share them.
 
-   I use Flashcat with LM Studio only, and everything runs great there. Ollama works, but it still
-   needs to be tested properly: so far it has only had a few short test runs (with a small test model
-   and with Gemma 4), and so has llama.cpp, so I can't say for sure how well they run. If you use it with Ollama, please
-   [let me know](https://github.com/TomTomsen765/flashcat/issues) how it goes.
+   On my MacBook Air M5, llama.cpp needed about 1 GB less memory than LM Studio and answered a bit faster
+   (one short measurement, same model and questions).
+
+   I use Flashcat with llama.cpp now, because it is fast and leaves the most memory free. Before that I
+   used it with LM Studio for a long time, and everything runs great there. llama.cpp is still new in
+   Flashcat, so not every feature has been tried with it yet. Ollama works, but it still needs to be tested
+   properly: so far it has only had a few short test runs (with a small test model and with Gemma 4), so
+   I can't say for sure how well it runs. If something misbehaves with llama.cpp or Ollama, please
+   [let me know](https://github.com/TomTomsen765/flashcat/issues).
 2. Run this in the terminal:
 
 ```sh
@@ -41,8 +43,10 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/r
 ```
 
 The installer checks your Mac, installs the newest release of the `flashcat` command into `~/.local/bin`
-and downloads the default model, **Gemma 4 26B** (about 15.6 GB), through LM Studio (with Ollama:
-`gemma4:26b`, about 18 GB).
+and downloads the default model, **Gemma 4 26B** (about 15.6 GB; with Ollama `gemma4:26b`, about 18 GB).
+With llama.cpp it asks first: you can say No and use a model of your own instead – put its `.gguf` file
+into `~/.flashcat/models` (models downloaded with LM Studio are found too) and start with
+`flashcat --model <name>`; `flashcat --models` lists what Flashcat finds.
 
 **With Homebrew** instead:
 
@@ -77,9 +81,10 @@ What the installer changes on your Mac, and nothing else:
 - installs the Python package `pygments` for colored code (`pip install --user`, optional) – one fixed
   version, and only if the downloaded file has the checksum written in the installer
 - if several model servers are installed: asks which one to use and saves the answer in `~/.flashcat/backend`
-- if none is installed and you have Homebrew: offers `brew install llama.cpp`, and runs it only after your Yes
-- downloads the model through LM Studio or Ollama, unless it is already there (with llama.cpp, Flashcat
-  offers the download on its first start; skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
+- on a first install without llama.cpp, if you have Homebrew: offers `brew install llama.cpp`, and runs it
+  only after your Yes
+- downloads the model, unless it is already there: through LM Studio or Ollama, or for llama.cpp – after
+  your Yes – into `~/.flashcat/models` (skip with `FLASHCAT_SKIP_MODEL=1 bash install.sh`)
 
 Flashcat itself is one Python file using only the standard library
 ([`bin/flashcat-chat.py`](bin/flashcat-chat.py)) and a short launcher ([`bin/flashcat`](bin/flashcat)).

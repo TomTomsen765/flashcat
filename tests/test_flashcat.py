@@ -1253,6 +1253,10 @@ class DownloadTest(unittest.TestCase):
         before = text[:text.index(line)].rstrip().splitlines()[-1]
         self.assertIn('ask "Install llama.cpp now with Homebrew?"', before)
         self.assertTrue(before.strip().startswith("if "))
+        # the same for the model: llama.cpp's 15.6 GB are downloaded only after a Yes (or not at all)
+        model = text[text.index('step "Model"'):]
+        self.assertEqual(model.count("download_gguf"), 1)
+        self.assertRegex(model, r'elif ask "Download the default model now[^"]*"; then\n\s+download_gguf ')
 
     def test_headless_lm_studio_is_recognised(self):
         # its background service is called llmster: Flashcat must see it running and stop it when it started it

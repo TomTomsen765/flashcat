@@ -17,6 +17,7 @@ REPO="TomTomsen765/flashcat"
 MODEL_KEY="gemma-4-26b-a4b-it-qat"
 OLLAMA_MODEL="gemma4:26b"
 LLAMACPP_FILE="gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
+LLAMACPP_IMAGE_FILE="mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"
 MODEL_URL="https://huggingface.co/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF"
 BIN="$HOME/.local/bin"
 LMS="$HOME/.lmstudio/bin/lms"
@@ -52,6 +53,9 @@ ${DIM}      /\\_/\\${RESET}
 ${DIM}     (${RESET} ${ORANGE}o.o${RESET} ${DIM})${RESET}    ${BOLD}Flashcat${RESET} installer
 ${DIM}      > ^ <${RESET}     ${DIM}a local AI assistant for your terminal${RESET}
 EOF
+
+first_install=1  # a first install offers more than an update
+[[ -e $BIN/flashcat ]] && first_install=
 
 # ---------- requirements ----------
 step "Checking requirements"
@@ -102,11 +106,22 @@ has_model() {  # is Gemma 4 already there? (checked in the model folders: asking
   esac
 }
 backend_note() {
-  if has_model "$1"; then
-    if [[ $1 == llamacpp ]]; then echo "Gemma 4 downloaded ✓, needs the least memory"; else echo "Gemma 4 downloaded ✓"; fi
+  local best=""
+  [[ $1 == llamacpp ]] && best="recommended: the fastest, needs the least memory · "
+  if has_model "$1"; then echo "${best}Gemma 4 downloaded ✓"
   elif [[ $1 == ollama ]] && has_model lmstudio; then echo "can use LM Studio's download of Gemma 4"
-  elif [[ $1 == ollama ]]; then echo "not downloaded yet (about 18 GB)"
-  else echo "not downloaded yet (15.6 GB)"; fi
+  elif [[ $1 == ollama ]]; then echo "Gemma 4 not downloaded yet (about 18 GB)"
+  else echo "${best}Gemma 4 not downloaded yet (15.6 GB)"; fi
+}
+download_gguf() {  # Gemma 4 for llama.cpp: the files LM Studio would download; a download that broke off continues
+  local dir="$HOME/.flashcat/models/${MODEL_URL##*/}" f
+  mkdir -p -m 700 "$HOME/.flashcat"
+  mkdir -p "$dir"
+  for f in "$LLAMACPP_FILE" "$LLAMACPP_IMAGE_FILE"; do
+    [[ -f $dir/$f ]] && continue
+    curl --proto '=https' --tlsv1.2 -fL -C - --progress-bar -o "$dir/$f.part" "$MODEL_URL/resolve/main/$f" || return 1
+    mv "$dir/$f.part" "$dir/$f"
+  done
 }
 
 step "Model server"
@@ -116,31 +131,43 @@ for b in lmstudio ollama llamacpp; do
 done
 if [[ -z $installed ]]; then
   note "Flashcat needs a program that runs the model on your Mac. None is installed yet:"
-  note "  LM Studio   an app with a window, the one Flashcat is built and tested with   https://lmstudio.ai/download"
-  note "  Ollama      a small app in the menu bar                                       https://ollama.com"
-  note "  llama.cpp   no app at all, needs the least memory                             brew install llama.cpp"
-  if command -v brew >/dev/null 2>&1 && ask "Install llama.cpp now with Homebrew?"; then
+  note "  llama.cpp   recommended: the fastest, needs the least memory, no app   brew install llama.cpp"
+  note "  LM Studio   an app with a window to try and manage models              https://lmstudio.ai/download"
+  note "  Ollama      a small app in the menu bar                                https://ollama.com"
+fi
+# llama.cpp is the best way to run the model: offered on a first install, installed only after a Yes
+picked=""
+if ! have llamacpp && [[ -n $first_install || -z $installed ]] && command -v brew >/dev/null 2>&1; then
+  [[ -n $installed ]] && note "llama.cpp is not installed. It is the recommended way to run the model: the fastest, and it needs the least memory."
+  if ask "Install llama.cpp now with Homebrew?"; then
     brew install llama.cpp || fail "Installing llama.cpp failed. Try:  brew install llama.cpp"
     have llamacpp || fail "llama.cpp was installed, but llama-server is not on your PATH. Open a new terminal and run this installer again."
-    installed=" llamacpp"
+    installed="$installed llamacpp"
+    picked=llamacpp
     ok "llama.cpp"
-  else
-    fail "No model server found. Install one of the three (LM Studio: open it once afterwards), then run this
-    installer again."
   fi
+fi
+if [[ -z $installed ]]; then
+  fail "No model server found. Install one of the three (llama.cpp needs Homebrew, https://brew.sh; LM Studio: open
+    it once afterwards), then run this installer again."
 fi
 # which one: FLASHCAT_BACKEND, else an earlier choice, else the only one - with several, ask once and remember
 backend="${FLASHCAT_BACKEND:-}"
 [[ -z $backend && -f $HOME/.flashcat/backend ]] && backend=$(<"$HOME/.flashcat/backend")
-if ! have "$backend"; then
+if [[ -n $picked && -z ${FLASHCAT_BACKEND:-} ]]; then  # just installed on request: that is the choice
+  backend=$picked
+  mkdir -p -m 700 "$HOME/.flashcat"
+  printf '%s\n' "$backend" > "$HOME/.flashcat/backend"
+elif ! have "$backend"; then
   set -- $installed
   backend=$1
   if (( $# > 1 )) && { : </dev/tty; } 2>/dev/null; then  # only with a terminal to ask in
-    default=1 i=0
-    for b in "$@"; do
+    default="" i=0
+    for b in "$@"; do  # Enter picks llama.cpp, else the first one that has the model
       i=$((i + 1))
-      has_model "$b" && { default=$i; break; }
+      if [[ $b == llamacpp ]]; then default=$i; elif [[ -z $default ]] && has_model "$b"; then default=$i; fi
     done
+    default=${default:-1}
     i=0
     for b in "$@"; do
       i=$((i + 1))
@@ -225,8 +252,15 @@ lmstudio_running || service_running_before=
 if [[ $backend == llamacpp ]]; then
   if has_model llamacpp; then
     ok "Gemma 4 26B is already downloaded"
+  elif [[ ${FLASHCAT_SKIP_MODEL:-} == 1 ]]; then
+    note "Skipped. flashcat offers the download of Gemma 4 26B on its first start."
+  elif ask "Download the default model now, Gemma 4 26B (15.6 GB)?"; then
+    download_gguf || fail "The model download failed. Run the installer again – it continues where it stopped."
+    ok "Gemma 4 26B downloaded"
   else
-    note "Gemma 4 26B (about 15.6 GB) is not downloaded yet – flashcat offers it on the first start."
+    note "No model downloaded. Flashcat offers Gemma 4 again on its first start. To use another model instead,"
+    note "put its .gguf file into ~/.flashcat/models (models downloaded with LM Studio are found too) and start"
+    note "with:  flashcat --model <name>   (flashcat --models lists what it finds)"
   fi
 elif [[ $backend == ollama ]]; then
   if has_model ollama || ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then

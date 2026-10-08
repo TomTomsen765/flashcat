@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio", "ollama" or "llamacpp", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
