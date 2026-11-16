@@ -252,6 +252,11 @@ locked.** Details: [SECURITY.md](SECURITY.md).
 - The old version is backed up in `.flashcat-backup/` (kept out of git automatically); `/undo`
   reverts the last change (and refuses if the file was replaced by a link that leads outside the
   folder since). Flashcat itself cannot change or remove the backups.
+- If the model prints a whole file into its answer instead of writing it, Flashcat offers to save it –
+  with the same preview and question, under the same rules (only inside the folder, only plain text
+  types). Without your `Y` nothing is written.
+- If you cancel with Esc after files were changed, the changes stay (`/undo` reverts them) and the
+  model is told that it was stopped, so it does not work from an outdated picture.
 
 **Every internet access asks first**
 - Web searches and web pages are only fetched after your `Y` – nothing leaves your Mac before that,

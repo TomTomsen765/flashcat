@@ -33,6 +33,8 @@ own code, whatever the model asks for.
 - Every write, change and move shows a preview and needs your `Y`. Old versions go to
   `.flashcat-backup/`, which Flashcat itself cannot write to or move, which must not be a link to
   somewhere else, and which gets its own `.gitignore`.
+- When the model prints a file into its answer instead of writing it, Flashcat offers to save it. That
+  goes through the same code as the model's own `write_file`: same checks, same preview, same question.
 
 **Commands**
 - In plan mode (`/plan`) the model is offered the reading tools only, and the code refuses every tool

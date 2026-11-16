@@ -49,7 +49,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio", "ollama" or "llamacpp", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -101,11 +101,15 @@ SYSTEM = (
     "You can read and search text, PDF, Word and Excel files (read_file reads scanned PDFs and images with text "
     "via text recognition), look at images (view_image), search the internet (web_search) and read web pages "
     "(fetch_url). For information from the internet, name the source with its address (URL). "
-    "You create text files (e.g. .txt, .md, .csv) with write_file or change them precisely with edit_file; "
+    "You create text files (documents, data, web pages, program code - e.g. .txt, .md, .csv, .html, .js, .py) "
+    "with write_file or change them precisely with edit_file; "
     "you create Word documents (.docx) with write_docx and PDF documents with write_pdf; rename or move files with move_file "
     "(several at once with move_files). "
     "For changes to existing text files use edit_file: read the file first and give old_text exactly "
     "as it appears in the file. "
+    "When the user wants a file created or changed (a web page, a script, a document), write it with these "
+    "tools - also when it is long. Do not print the file's content in the chat and never tell the user to "
+    "save or copy it themselves; after writing, say in a few sentences what you did. "
     "You can run terminal commands with run_command (zsh, in this folder) - e.g. to run tests, scripts or "
     "builds and then fix what fails. They run in a sandbox: no internet, writing only inside this folder. "
     "Servers and other programs that keep running (npm start, a development server, anything that listens on a "
@@ -156,8 +160,10 @@ TOOLS = [
             "required": ["pattern"]}}},
     {"type": "function", "function": {
         "name": "write_file",
-        "description": "Creates a new text file or replaces its entire content. "
-                       "For small changes to existing files use edit_file. The user confirms first.",
+        "description": "Creates a new text file (document, data, web page, program code) or replaces its entire "
+                       "content. Use it whenever the user wants a file - never show the content in the chat "
+                       "for the user to save. For small changes to existing files use edit_file. "
+                       "The user confirms first.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "Relative path to the file"},
             "content": {"type": "string", "description": "Complete new file content"}},
@@ -1686,7 +1692,8 @@ FUNCS = {"list_dir": list_dir, "project_overview": project_overview, "read_file"
 
 INTERNAL_REPLIES = ("Understood.", "All right, I have the conversation so far in mind.")
 state = {"thinking": False, "context": 32768, "used": 0, "last_answer": "", "tok_s": 0.0, "turn_start": 0.0,
-         "phase": "thinking", "tools_shown": False, "plan": False, "changed_in_turn": False}
+         "phase": "thinking", "tools_shown": False, "plan": False, "changed_in_turn": False, "finish": "",
+         "turn_message": None}
 # for the receipt shown when the chat ends
 stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(), "moved": 0, "undone": 0,
          "commands": 0}
@@ -2069,6 +2076,7 @@ def call_model(messages, tools=True, show=True, max_tokens=None):
                 spinner.join()
 
     content, calls = "", {}
+    state["finish"] = ""  # why the reply ended; "length" = cut off (context full or token limit)
     t_start, t_first, generated = time.time(), None, 0
     renderer = MarkdownStream()
     try:
@@ -2090,6 +2098,7 @@ def call_model(messages, tools=True, show=True, max_tokens=None):
                             generated = usage.get("completion_tokens", 0)
                         choices = chunk.get("choices") or [{}]
                         delta = choices[0].get("delta") or {}
+                        state["finish"] = choices[0].get("finish_reason") or state["finish"]
                         if t_first is None and (delta.get("content") or delta.get("tool_calls")
                                                 or delta.get("reasoning_content")):
                             t_first = time.time()
@@ -2200,12 +2209,17 @@ def ui_break():
 
 def run_tool(call):
     name = call["function"]["name"]
+    broken = False
     try:
         args = json.loads(call["function"].get("arguments") or "{}")
     except json.JSONDecodeError:
-        args = {}
+        args, broken = {}, True
     if not isinstance(args, dict):
-        args = {}
+        args, broken = {}, True
+    if broken:
+        # a call that was cut off (context full) or garbled: the chat keeps a valid, empty call - some model
+        # servers refuse a chat that contains arguments they cannot read
+        call["function"]["arguments"] = "{}"
     recovered = ""
     if name == "edit_file" and not args.get("path") and isinstance(args.get("old_text"), str):
         guess = file_with_text(args["old_text"])  # the model tends to leave out the path of a long edit
@@ -2228,7 +2242,7 @@ def run_tool(call):
         target = short
     elif name == "fetch_url":
         target = urllib.parse.urlparse(raw).netloc or short
-    elif missing:
+    elif missing or broken:
         target = "?"
     elif raw == ".":
         target = "the folder"
@@ -2247,6 +2261,10 @@ def run_tool(call):
         if state["plan"] and name not in PLAN_TOOLS:  # enforced here, whatever the model tries
             raise ValueError("plan mode is on - nothing is changed or run now. Present your plan; the user "
                              "switches plan mode off with /plan.")
+        if broken:  # not "path is missing": the model would repeat the same long call
+            raise ValueError(f"the arguments of this {name} call arrived incomplete (cut off or not valid JSON) - "
+                             "nothing was done. Call it again. If the content is very long, do it in parts: a "
+                             "first part with write_file, then add the rest with edit_file.")
         if missing:  # say it in the model's terms, so it can repeat the call correctly
             raise ValueError(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing – call {name} "
                              f"again with all of: {', '.join(needed)}.")
@@ -3557,26 +3575,135 @@ def chat_loop(messages):
                 return
             continue
 
-        turn_start = len(messages)
+        before = work_done()
         try:
             run_turn(messages, user)
             save_session(messages)
             show_context()
         except KeyboardInterrupt:
-            del messages[turn_start:]
-            pending_images.clear()
             ui_break()
             print(f"\n  {YELLOW}✗{RESET} {DIM}cancelled{RESET}\n")
+            if end_turn_early(messages, work_done() != before, "I cancelled your work on my last request here."):
+                save_session(messages)
         except Exception as e:
-            del messages[turn_start:]
-            pending_images.clear()
             ui_break()
             print(f"\n  {RED}✗ Error:{RESET} {e}\n")
+            if end_turn_early(messages, work_done() != before, "your work on my last request stopped here because "
+                                                               "of an error."):
+                save_session(messages)
+
+
+def work_done():
+    """Changes when a file was written or moved or a command ran."""
+    return len(journal), stats["commands"]
+
+
+def end_turn_early(messages, acted, why):
+    """After a cancel or an error in the middle of a question. If nothing was changed yet, the question is taken
+    out of the chat again. If files were changed or commands ran, the finished steps stay - the model must know
+    what it already did - and only a half-finished step is dropped. Returns True if the chat keeps the question."""
+    pending_images.clear()
+    turn = state["turn_message"]
+    start = next((i for i in range(len(messages) - 1, 0, -1) if messages[i] is turn), None)
+    if start is not None and not acted:
+        del messages[start:]
+        return False
+    # a step is finished when every tool call of the model's message got its result
+    last = next((i for i in range(len(messages) - 1, 0, -1) if messages[i].get("tool_calls")), None)
+    if last is not None and (start is None or last > start):
+        results = sum(1 for m in messages[last + 1:] if m["role"] == "tool")
+        if results < len(messages[last]["tool_calls"]):
+            del messages[last:]
+    if start is not None and len(messages) == start + 1:
+        del messages[start:]  # only the question is left
+        return False
+    messages += [{"role": "user", "content": f"(Info: {why} What you did up to that point stays done; the rest "
+                                             "was not done.)"},
+                 {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+    return True
 
 
 # a tool result must still fit into the context: tokens kept free for the answer, a careful characters-per-token
 # guess (prose has about 4, numbers and code fewer), and the least a result is cut down to
 RESERVED_TOKENS, CHARS_PER_TOKEN, MIN_RESULT = 3000, 2.5, 2000
+MAX_STEPS = 15  # model calls per question
+
+# The model sometimes prints a whole file into its answer and tells the user to save it, instead of calling
+# write_file. Flashcat then offers to save it: the usual card and question, nothing is written without a Yes.
+CODE_BLOCK = re.compile(r"^[ \t]*```([\w+#.-]*)[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.S | re.M)
+FILE_NAME = re.compile(r"(?<![\w/.-])((?:[\w-][\w.-]*/)*[\w-][\w.-]*\.[A-Za-z0-9]{1,10})(?![\w-])")
+LIBRARY_NAME = re.compile(r"[A-Z][A-Za-z]*\.js")  # Three.js, Node.js: products, not files
+MIN_SAVE_LINES = 25
+LANGUAGE_EXT = {"html": (".html", ".htm"), "css": (".css",), "javascript": (".js", ".mjs", ".cjs"),
+                "typescript": (".ts",), "python": (".py",), "bash": (".sh", ".zsh", ".bash"), "json": (".json",),
+                "markdown": (".md",), "yaml": (".yaml", ".yml"), "svg": (".svg",), "sql": (".sql",),
+                "swift": (".swift",), "go": (".go",), "rust": (".rs",), "ruby": (".rb",), "php": (".php",)}
+LANGUAGE_FILE = {"html": "index.html", "css": "style.css", "javascript": "script.js", "python": "script.py",
+                 "bash": "script.sh"}
+
+
+def file_names(text, endings):
+    """File names mentioned in `text` that may be written, in their order; `endings` narrows them down."""
+    names = []
+    for name in FILE_NAME.findall(text):
+        ending = os.path.splitext(name)[1].lower()
+        if ending in WRITE_EXT and (not endings or ending in endings) and not LIBRARY_NAME.fullmatch(name):
+            if not os.path.isdir(os.path.join(ROOT, os.path.dirname(name))):
+                name = os.path.basename(name)  # part of an address or of a path elsewhere: only the name counts
+            names.append(name)
+    return names
+
+
+def shown_files(answer, question=""):
+    """{file name: content} for the large code blocks of an answer that look like whole files. The name is the one
+    mentioned last before the block; for a single block also the only one in the answer or in the question, or
+    the usual name for the language."""
+    blocks = [m.start() for m in CODE_BLOCK.finditer(answer) if m.group(2).count("\n") >= MIN_SAVE_LINES]
+    prose = CODE_BLOCK.sub("", answer)
+    files, end = {}, 0
+    for m in CODE_BLOCK.finditer(answer):
+        before, end = answer[end:m.start()], m.end()
+        if m.start() not in blocks:
+            continue
+        language = m.group(1).lower()
+        language = CODE_ALIASES.get(language, language)
+        endings = LANGUAGE_EXT.get(language, ())
+        names = file_names(before, endings)[-1:]
+        if not names and len(blocks) == 1:
+            for text in (prose, question):
+                found = set(file_names(text, endings))
+                if len(found) == 1:
+                    names = list(found)
+                    break
+            else:
+                names = [LANGUAGE_FILE[language]] if language in LANGUAGE_FILE else []
+        if names:
+            files[names[0]] = m.group(2)  # shown twice (before and after a fix): the later version counts
+    return files
+
+
+def save_shown_code(messages, answer, question=""):
+    saved = []
+    for name, content in shown_files(answer, question).items():
+        full = os.path.join(ROOT, name)
+        if os.path.isfile(full):
+            with open(full, encoding="utf-8", errors="replace") as f:
+                if f.read().strip() == content.strip():
+                    continue  # the answer only shows what the file already contains
+        print(f"\n  {DIM}◇ the answer shows {clean(name)} ({plural(content.count(chr(10)), 'line')}) but did not "
+              f"save it – {NAME} can do that:{RESET}")
+        try:
+            if write_file(name, content).startswith("Written"):
+                saved.append(name)
+        except (ValueError, OSError) as e:
+            print(f"  {DIM}not saved: {e}{RESET}")
+    if saved:
+        messages += [{"role": "user", "content": f"(Info: {NAME} saved the code from your last answer as "
+                                                 f"{', '.join(saved)}, with my OK. "
+                                                 f"{'These files exist now; change them' if len(saved) > 1 else 'This file exists now; change it'} "
+                                                 "with edit_file from here on.)"},
+                     {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+    return saved
 
 
 def run_turn(messages, user, show=True, attachment=""):
@@ -3594,14 +3721,24 @@ def run_turn(messages, user, show=True, attachment=""):
         else:
             content += attachment
     messages.append({"role": "user", "content": content})
-    nudged, test_rounds, compacted = False, 0, False
-    for step in range(15):
+    state["turn_message"] = messages[-1]
+    nudged, test_rounds, compacted, written = False, 0, False, len(journal)
+    for step in range(MAX_STEPS):
         state["phase"] = "thinking" if step == 0 else "working"
         if step and not compacted:
             # once per question: a tool result too large for the context would otherwise be summarized, fetched
             # again and summarized again
             compacted = auto_compact(messages, task=user)
         msg = call_model(messages, show=show)
+        if "tool_calls" not in msg and state["finish"] == "length":
+            # cut off in the middle of an answer or of a tool call (which then does not arrive at all)
+            if msg["content"].strip():
+                messages.append(msg)
+                state["last_answer"] = msg["content"].strip()
+            ui_break()
+            print(f"  {YELLOW}✗{RESET} {DIM}cut off: the context is full – /compact or a new chat (/clear) frees "
+                  f"space{RESET}")
+            break
         if "tool_calls" not in msg and not msg["content"].strip() and not nudged:
             nudged = True  # empty reply: ask once more instead of showing nothing
             messages.append({"role": "user", "content": "(Please answer my last question now.)"})
@@ -3621,6 +3758,8 @@ def run_turn(messages, user, show=True, attachment=""):
                                      f"cause, fix it, and it runs again.)\n{result}"})
                     state["tools_shown"] = True
                     continue
+            if show and not state["plan"] and len(journal) == written:
+                save_shown_code(messages, msg["content"], user)
             break
         room = int((state["context"] - state["used"] - RESERVED_TOKENS) * CHARS_PER_TOKEN) if state["used"] else MAX_READ * 4
         for c in msg["tool_calls"]:
@@ -3635,6 +3774,9 @@ def run_turn(messages, user, show=True, attachment=""):
             messages.append({"role": "user", "content": [
                 {"type": "text", "text": f"(Image from view_image: {rel})"},
                 {"type": "image_url", "image_url": {"url": url}}]})
+    else:
+        ui_break()
+        print(f"\n  {YELLOW}✗{RESET} {DIM}stopped after {MAX_STEPS} steps – say \"continue\" to go on{RESET}")
 
 
 MAX_PIPED = 200_000

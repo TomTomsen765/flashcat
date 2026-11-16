@@ -741,6 +741,154 @@ class ModelLoopTest(FlashcatTest):
         self.assertIn("path is missing", self.chat.run_tool(ResolveTest.call("edit_file", old_text="l", new_text="x")))
 
 
+    def test_cut_off_call_is_named_and_stays_readable_in_the_chat(self):
+        # arguments that end in the middle (context full): not "path is missing", and the chat keeps valid JSON
+        call = {"id": "c1", "type": "function", "function": {"name": "write_file",
+                                                             "arguments": '{"content": "<html>\\n<body'}}
+        result = self.chat.run_tool(call)
+        self.assertIn("arrived incomplete", result)
+        self.assertNotIn("is missing", result)
+        self.assertEqual(call["function"]["arguments"], "{}")
+        self.assertFalse(os.path.exists(os.path.join(self.project, "index.html")))
+
+    def test_cut_off_answer_is_reported(self):
+        def reply(*a, **k):
+            self.chat.state["finish"] = "length"
+            return {"role": "assistant", "content": ""}
+        with mock.patch.object(self.chat, "call_model", side_effect=reply) as model:
+            messages = [{"role": "system", "content": "sys"}]
+            self.chat.run_turn(messages, "write a long page", show=False)
+        self.assertEqual(model.call_count, 1)  # asking again would be cut off again
+        self.assertIn("cut off: the context is full", self.out.getvalue())
+
+    def test_step_limit_is_reported(self):
+        step = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]}
+        with mock.patch.object(self.chat, "call_model", side_effect=lambda *a, **k: json.loads(json.dumps(step))):
+            self.chat.run_turn([{"role": "system", "content": "sys"}], "look around", show=False)
+        self.assertIn(f"stopped after {self.chat.MAX_STEPS} steps", self.out.getvalue())
+        self.out.truncate(0)
+        with mock.patch.object(self.chat, "call_model", return_value={"role": "assistant", "content": "Hi."}):
+            self.chat.run_turn([{"role": "system", "content": "sys"}], "hello", show=False)
+        self.assertNotIn("stopped after", self.out.getvalue())
+
+
+class CancelTest(FlashcatTest):
+    """Esc or an error in the middle of a question."""
+
+    def call(self, name, **args):
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+    def cancelled_turn(self, replies, answers=()):
+        """Runs a question whose model call raises KeyboardInterrupt once the scripted replies are used up."""
+        def reply(*a, **k):
+            if not replies:
+                raise KeyboardInterrupt
+            return replies.pop(0)
+        self.answers = list(answers)
+        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "earlier"},
+                    {"role": "assistant", "content": "ok"}]
+        before = self.chat.work_done()
+        with mock.patch.object(self.chat, "call_model", side_effect=reply):
+            with self.assertRaises(KeyboardInterrupt):
+                self.chat.run_turn(messages, "do it", show=False)
+        return messages, self.chat.work_done() != before
+
+    def test_nothing_changed_the_question_is_forgotten(self):
+        messages, acted = self.cancelled_turn([self.call("read_file", path="notes.txt")])
+        self.assertFalse(acted)
+        self.assertFalse(self.chat.end_turn_early(messages, acted, "cancelled."))
+        self.assertEqual(len(messages), 3)
+
+    def test_after_a_change_the_model_still_knows_what_it_did(self):
+        messages, acted = self.cancelled_turn([self.call("write_file", path="a.txt", content="one")], ["y"])
+        self.assertTrue(acted)
+        self.assertTrue(self.chat.end_turn_early(messages, acted, "I cancelled."))
+        self.assertEqual([m["role"] for m in messages[3:]], ["user", "assistant", "tool", "user", "assistant"])
+        self.assertIn("Written: a.txt", messages[5]["content"])
+        self.assertIn("(Info: I cancelled.", messages[6]["content"])
+
+    def test_a_half_finished_step_is_dropped(self):
+        messages, acted = self.cancelled_turn([self.call("write_file", path="a.txt", content="one")], ["y"])
+        # a second step was interrupted inside its tool: the call is in the chat, its result is not
+        messages.append(self.call("read_file", path="notes.txt"))
+        self.chat.end_turn_early(messages, acted, "I cancelled.")
+        self.assertEqual([m["role"] for m in messages[3:]], ["user", "assistant", "tool", "user", "assistant"])
+        for i, m in enumerate(messages):  # every call has its result
+            if m.get("tool_calls"):
+                self.assertEqual(messages[i + 1]["role"], "tool")
+
+    def test_after_a_summary_in_the_middle_nothing_half_finished_stays(self):
+        # the summary replaced the chat, the question's own message is gone: positions from before do not count
+        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "notes info"},
+                    {"role": "assistant", "content": "notes"}, self.call("read_file", path="notes.txt")]
+        self.chat.state["turn_message"] = {"role": "user", "content": "do it"}
+        self.assertTrue(self.chat.end_turn_early(messages, False, "I cancelled."))
+        self.assertFalse(any(m.get("tool_calls") for m in messages))
+        self.assertEqual(messages[-1]["role"], "assistant")
+
+
+class ShownCodeTest(FlashcatTest):
+    """The model prints a file into its answer instead of writing it: Flashcat offers to save it."""
+    PAGE = "<html>\n" + "".join(f"<p>line {i}</p>\n" for i in range(30)) + "</html>\n"
+
+    def answer(self, before="Save this code as `index.html` and open it. It uses Three.js.", language="html"):
+        return f"{before}\n\n```{language}\n{self.PAGE}```\n\nHave fun!"
+
+    def test_file_name_comes_from_the_answer_the_question_or_the_language(self):
+        files = self.chat.shown_files
+        self.assertEqual(files(self.answer()), {"index.html": self.PAGE})
+        self.assertEqual(files(self.answer("Here it is:") + " Save it as page.html."), {"page.html": self.PAGE})
+        self.assertEqual(files(self.answer("Here it is:"), "make me anna.html please"), {"anna.html": self.PAGE})
+        self.assertEqual(files(self.answer("Here it is:")), {"index.html": self.PAGE})
+        self.assertEqual(files(self.answer("Here it is:", "")), {})  # no name and no language: no guess
+        self.assertEqual(files("Use this:\n\n```html\n<p>short</p>\n```\n"), {})  # an example, not a file
+        two = self.answer("First `index.html`:") + "\n\nThen `js/app.js` with Three.js:\n\n```js\n" + "x()\n" * 30 + "```\n"
+        self.assertEqual(list(files(two)), ["index.html", "app.js"])  # there is no folder js
+        os.mkdir(os.path.join(self.project, "js"))
+        self.assertEqual(list(files(two)), ["index.html", "js/app.js"])
+        pasted = "error in file:///Users/me/My%20Site/index.html please fix"
+        self.assertEqual(list(files(self.answer("Fixed:"), pasted)), ["index.html"])
+        self.assertEqual(files(self.answer("Put it into ../outside/secret.txt or /etc/hosts.conf:", "")), {})
+
+    def test_saved_only_after_a_yes(self):
+        reply = {"role": "assistant", "content": self.answer()}
+        for answers, exists in ((["n"], False), (["y"], True)):
+            self.answers = answers
+            messages = [{"role": "system", "content": "sys"}]
+            with mock.patch.object(self.chat, "call_model", return_value=dict(reply)):
+                self.chat.run_turn(messages, "build a page", show=True)
+            self.assertEqual(os.path.exists(os.path.join(self.project, "index.html")), exists)
+        self.assertEqual(self.read("index.html"), self.PAGE)
+        self.assertIn("saved the code from your last answer as index.html", messages[-2]["content"])
+        self.assertEqual(len(self.asked), 2)
+        # the same answer again: the file already has this content, no question
+        with mock.patch.object(self.chat, "call_model", return_value=dict(reply)):
+            self.chat.run_turn([{"role": "system", "content": "sys"}], "show it again", show=True)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_not_offered_in_plan_mode_or_after_the_model_wrote_itself(self):
+        self.chat.state["plan"] = True
+        with mock.patch.object(self.chat, "call_model", return_value={"role": "assistant", "content": self.answer()}):
+            self.chat.run_turn([{"role": "system", "content": "sys"}], "build a page", show=True)
+        self.chat.state["plan"] = False
+        replies = [{"role": "assistant", "content": "", "tool_calls": [{"id": "c", "type": "function", "function": {
+                        "name": "write_file", "arguments": json.dumps({"path": "other.html", "content": "<p>x</p>"})}}]},
+                   {"role": "assistant", "content": self.answer()}]
+        self.answers = ["y"]
+        with mock.patch.object(self.chat, "call_model", side_effect=lambda *a, **k: replies.pop(0)):
+            self.chat.run_turn([{"role": "system", "content": "sys"}], "build a page", show=True)
+        self.assertEqual(len(self.asked), 1)  # only the model's own write
+        self.assertFalse(os.path.exists(os.path.join(self.project, "index.html")))
+
+    def test_a_name_outside_the_folder_or_a_type_that_runs_is_never_written(self):
+        self.answers = ["y", "y"]
+        self.assertEqual(self.chat.save_shown_code([], self.answer("Save as `../outside/page.html`:")), ["index.html"])
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "page.html")))
+        self.assertEqual(self.chat.shown_files(self.answer("Save as `start.command`:", "")), {})
+
+
 class PlanModeTest(FlashcatTest):
     def test_nothing_is_changed_or_run_and_nobody_is_asked(self):
         self.chat.state["plan"] = True
