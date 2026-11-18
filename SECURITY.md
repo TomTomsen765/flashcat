@@ -35,6 +35,14 @@ own code, whatever the model asks for.
   somewhere else, and which gets its own `.gitignore`.
 - When the model prints a file into its answer instead of writing it, Flashcat offers to save it. That
   goes through the same code as the model's own `write_file`: same checks, same preview, same question.
+- `/auto` (off by default, for the current chat only, never saved) answers the question for creating and
+  changing files with Yes. Every change is still shown and backed up, and `/undo` / `/rewind` work as
+  usual. It does not cover moving files, commands, servers, internet access, private data or `/undo`
+  itself; in plan mode the code still refuses every change.
+- Excel workbooks (`write_xlsx`) contain formulas only if they are simple arithmetic on cells of the
+  same sheet with `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `ROUND` or `ABS`. Everything else that starts
+  with `=` (links, other sheets or files, DDE such as `=cmd|…`, functions that fetch data) is written as
+  text, so a workbook cannot be made to fetch or run anything when you open it.
 
 **Commands**
 - In plan mode (`/plan`) the model is offered the reading tools only, and the code refuses every tool
@@ -65,6 +73,19 @@ own code, whatever the model asks for.
   after 2 minutes (the model can ask for up to 10).
 - Nothing keeps running afterwards: when the command ends, everything it started is stopped – also
   processes that detached themselves (Flashcat finds them by a mark in their environment).
+- The one exception is a server started with `start_server` (development servers like `npm run dev`).
+  It needs your `Y`, only one runs at a time, and it uses the same sandbox with one addition: it may
+  listen on the port shown in the question – no other port, and still no outgoing connections. After it
+  started, Flashcat checks with `lsof` where it listens; if it is reachable from other devices in the
+  network (not only `127.0.0.1`), you are asked in red, and No stops it. It is stopped with `/stop`, when
+  the chat ends (also on `SIGHUP` / `SIGTERM` when the window is closed), and – should the chat itself be
+  killed – by the cleanup that runs when the window's Flashcat ends (it finds the server's processes by
+  their mark). The model can open its pages with `fetch_url` without a question, but only
+  `http://localhost:<that port>` – every other local address stays refused.
+- `/review` and `/commit` run git in the same sandbox, with programs from the repository's settings
+  switched off (`core.fsmonitor`, `core.pager`, external diff tools and text conversion). `/commit`
+  shows the message and needs your `Y`; staging everything (`git add -A`) asks separately. Commit hooks
+  of the repository run inside the sandbox, and the git hooks and settings check below applies.
 - The one command that runs without a question is the test command you set yourself with
   `/test <command>`: after Flashcat changed files it runs in the same sandbox (shown in a card), and
   its output goes back to the model, at most three times per question. It is stored per folder in
@@ -101,6 +122,11 @@ own code, whatever the model asks for.
 - The model runs locally in LM Studio, Ollama or llama.cpp; Flashcat talks to it on `localhost` only. It starts
   llama.cpp's server for this Mac only (`127.0.0.1`) and with `--offline`.
 - Chats and settings are stored in `~/.flashcat`, readable only by your user account.
+- The text Flashcat extracted from PDF, Word, Excel files and images is kept in `~/.flashcat/cache/text`
+  (folder 0700, files 0600), keyed by the file's path, size and modification time, so it is read again
+  when the file changes. Entries unused for 30 days are deleted, and the cache stays below 200 MB.
+  Deleting a document does not delete its remembered text right away.
+- `/say` passes the answer to macOS' own `say` command; it runs on the Mac, nothing is sent out.
 
 **Installer**
 - `install.sh` and `uninstall.sh` are read completely before anything runs, so a download that

@@ -1,4 +1,5 @@
 #!/bin/zsh
+setopt extended_glob
 # "Last one out turns off the lights": called when a Flashcat session ends (normally or when its window is closed).
 # Unloads the model, stops the server and the LM Studio background service (or Ollama, llama.cpp) - but only if Flashcat
 # started them and no other Flashcat session is still running.
@@ -11,6 +12,17 @@ verbose=
 say() { [[ -n $verbose ]] && print -r -- "$1" >&2 }  # stderr: stdout may carry a one-shot answer
 
 rm -f $STATE/session.$1
+# servers a chat started (start_server) and did not stop itself, e.g. because its window was closed
+for f in $STATE/devserver.*(N); do
+  kill -0 ${f##*.} 2>/dev/null && continue
+  run=$(<$f)
+  if [[ $run == [0-9a-f](#c16) ]]; then
+    for pid in ${(f)"$(ps -Aww -E -o pid=,command= | grep -F "FLASHCAT_RUN=$run" | awk '{print $1}')"}; do
+      kill -9 $pid 2>/dev/null && say "Server stopped."
+    done
+  fi
+  rm -f $f
+done
 for f in $STATE/session.*(N); do
   if kill -0 ${f##*.} 2>/dev/null; then
     say "The model stays loaded – another Flashcat window is still open."

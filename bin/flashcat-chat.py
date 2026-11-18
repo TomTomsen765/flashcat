@@ -14,6 +14,7 @@ Usage: flashcat-chat.py MODEL [--continue] [QUESTION …]
        flashcat-chat.py --version | --confirm-folder
 """
 
+import ast
 import base64
 import datetime
 import difflib
@@ -25,6 +26,7 @@ import http.client
 import inspect
 import ipaddress
 import json
+import math
 import os
 import re
 import select
@@ -49,7 +51,7 @@ try:
 except ImportError:
     pass
 
-VERSION = "1.5.4"
+VERSION = "1.6.0"
 BACKEND = os.environ.get("FLASHCAT_BACKEND") or "lmstudio"  # "lmstudio", "ollama" or "llamacpp", chosen by the launcher
 SERVER = f"http://localhost:{os.environ.get('FLASHCAT_PORT') or (11434 if BACKEND == 'ollama' else 1234)}"
 API_KEY = os.environ.get("FLASHCAT_API_KEY", "")  # only needed if LM Studio requires authentication
@@ -103,7 +105,8 @@ SYSTEM = (
     "(fetch_url). For information from the internet, name the source with its address (URL). "
     "You create text files (documents, data, web pages, program code - e.g. .txt, .md, .csv, .html, .js, .py) "
     "with write_file or change them precisely with edit_file; "
-    "you create Word documents (.docx) with write_docx and PDF documents with write_pdf; rename or move files with move_file "
+    "you create Word documents (.docx) with write_docx, PDF documents with write_pdf and Excel workbooks (.xlsx) "
+    "with write_xlsx; rename or move files with move_file "
     "(several at once with move_files). "
     "For changes to existing text files use edit_file: read the file first and give old_text exactly "
     "as it appears in the file. "
@@ -113,8 +116,8 @@ SYSTEM = (
     "You can run terminal commands with run_command (zsh, in this folder) - e.g. to run tests, scripts or "
     "builds and then fix what fails. They run in a sandbox: no internet, writing only inside this folder. "
     "Servers and other programs that keep running (npm start, a development server, anything that listens on a "
-    "port) cannot run there - do not try them; tell the user to start them in another terminal window, and "
-    "run a build command that finishes instead. "
+    "port) cannot run there - start them with start_server instead (one at a time, the user confirms); you can then "
+    "open its pages with fetch_url on http://localhost:<port>, and stop it with stop_server. "
     "Never use commands to delete or overwrite files unless the user asked for exactly that; change files with "
     "edit_file / write_file, which keep a backup. "
     "IMPORTANT: The writing, command and internet tools ask the user for confirmation themselves. "
@@ -216,12 +219,38 @@ TOOLS = [
         "name": "run_command",
         "description": "Runs a terminal command (zsh) in the start folder and returns its output and exit code - "
                        "e.g. tests, scripts, builds, git status. Runs in a sandbox: no internet, it can only write "
-                       "inside the folder, no private data. Not interactive (no input), not for servers or other programs "
-                       "that keep running. The user confirms first.",
+                       "inside the folder, no private data. Not interactive (no input). Not for servers or other programs "
+                       "that keep running - use start_server for those. The user confirms first.",
         "parameters": {"type": "object", "properties": {
             "command": {"type": "string", "description": "The command line, e.g. 'python3 -m unittest'"},
             "timeout": {"type": "integer", "description": "Seconds until the command is stopped, default 120, max 600"}},
             "required": ["command"]}}},
+    {"type": "function", "function": {
+        "name": "write_xlsx",
+        "description": "Creates an Excel workbook (.xlsx) with one sheet from rows of cells; the first row is shown "
+                       "bold as the header. Numbers stay numbers. A cell may hold a simple formula such as "
+                       "=SUM(B2:B9) or =B2*C2 (functions: SUM, AVERAGE, MIN, MAX, COUNT, ROUND, ABS). "
+                       "The user confirms first.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Relative path, ending in .xlsx"},
+            "rows": {"type": "array", "description": "The rows, each a list of cells (text or numbers)",
+                     "items": {"type": "array", "items": {"type": ["string", "number", "null"]}}},
+            "sheet": {"type": "string", "description": "Name of the sheet (optional)"}},
+            "required": ["path", "rows"]}}},
+    {"type": "function", "function": {
+        "name": "start_server",
+        "description": "Starts a program that keeps running and listens on a port, e.g. a development server "
+                       "(npm run dev, npx @11ty/eleventy --serve, python3 -m http.server 8000). It runs in the same "
+                       "sandbox as run_command, but may listen on this one port. One server at a time; it stops with "
+                       "stop_server or when the chat ends. Returns its first output. The user confirms first.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string", "description": "The command line that starts the server"},
+            "port": {"type": "integer", "description": "The port the server listens on (1024-65535)"}},
+            "required": ["command", "port"]}}},
+    {"type": "function", "function": {
+        "name": "stop_server",
+        "description": "Stops the server started with start_server and returns its last output.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "view_image",
         "description": "Shows you an image from the folder (jpg, png, gif, webp, heic, …) so you can describe or analyze it.",
@@ -510,8 +539,63 @@ def read_xlsx(full, max_rows=3000):
     return "\n".join(out)
 
 
+TEXT_CACHE = os.path.join(HOME_DIR, "cache", "text")
+TEXT_CACHE_MAX, TEXT_CACHE_DAYS = 200_000_000, 30  # bytes kept, days an unused entry is kept
+
+
 def extract_text(full, allow_ocr=True):
-    """Text of PDF/Word/Excel files (and images via text recognition), or None for other files."""
+    """Text of PDF/Word/Excel files (and images via text recognition), or None for other files. Remembered in
+    ~/.flashcat/cache by file, size and modification time, so searching a folder of documents again is quick."""
+    try:
+        st = os.stat(full)
+        key = hashlib.sha256(f"{os.path.realpath(full)}\0{st.st_size}\0{st.st_mtime_ns}\0{allow_ocr}".encode()).hexdigest()
+    except OSError:
+        key = None
+    cached = os.path.join(TEXT_CACHE, key + ".txt") if key else None
+    if cached and os.path.isfile(cached):
+        try:
+            with open(cached, encoding="utf-8") as f:
+                text = f.read()
+            os.utime(cached)  # recently used
+            return text
+        except OSError:
+            pass
+    text = _extract_text(full, allow_ocr)
+    if cached and text is not None:
+        try:
+            os.makedirs(TEXT_CACHE, mode=0o700, exist_ok=True)
+            fd = os.open(cached + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(cached + ".tmp", cached)
+            trim_text_cache()
+        except OSError:
+            pass
+    return text
+
+
+def trim_text_cache():
+    """Removes entries not used for TEXT_CACHE_DAYS, and the oldest ones beyond TEXT_CACHE_MAX bytes."""
+    try:
+        entries = [(e.stat().st_mtime, e.stat().st_size, e.path) for e in os.scandir(TEXT_CACHE) if e.is_file()]
+    except OSError:
+        return
+    total = sum(size for _, size, _ in entries)
+    old = time.time() - TEXT_CACHE_DAYS * 86400
+    for mtime, size, path in sorted(entries):
+        if mtime < old or total > TEXT_CACHE_MAX:
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+
+
+def clear_text_cache():
+    shutil.rmtree(TEXT_CACHE, ignore_errors=True)
+
+
+def _extract_text(full, allow_ocr=True):
     ext = os.path.splitext(full)[1].lower()
     if ext in (".xlsx", ".xlsm"):
         return read_xlsx(full)
@@ -771,9 +855,13 @@ def check_target(path, allowed_ext):
     return full, rel
 
 
-def confirm(question, show_all=None):
-    """Y/N question. With `show_all` (a function), A shows the complete preview first and asks again."""
+def confirm(question, show_all=None, auto_ok=False):
+    """Y/N question. With `show_all` (a function), A shows the complete preview first and asks again. `auto_ok`: a
+    file change that /auto may allow without asking (never moves, commands, internet or private data)."""
     ui_break()
+    if auto_ok and state.get("auto") and not state.get("plan"):
+        print(f"  {YELLOW}✓ yes by /auto{RESET} {DIM}(no question){RESET}")
+        return True
     choices = "[Y/N/A = show all]" if show_all else "[Y/N]"
     try:
         answer = ask(f"  {ORANGE}?{RESET} {question} {DIM}{choices}{RESET} ").strip().lower()
@@ -810,7 +898,7 @@ def save_with_backup(full, rel, content=None, source_file=None):
     else:
         with open(full, "w", encoding="utf-8") as f:
             f.write(content)
-    journal.append({"type": "write", "full": full, "rel": rel, "backup": backup})
+    journal.append({"type": "write", "full": full, "rel": rel, "backup": backup, "turn": state.get("turn_id")})
     remember_file(full)
     state["changed_in_turn"] = True
     (stats["changed"] if backup else stats["created"]).add(rel)
@@ -871,7 +959,7 @@ def write_file(path, content):
             show_all = diff_card(f"overwrites {rel}", f.read(), content)
     else:
         show_all = preview(f"new file {rel} · {plural(len(lines), 'line')}", lines)
-    if not confirm("Write?", show_all):
+    if not confirm("Write?", show_all, auto_ok=True):
         print()
         return "The user declined writing. The file was not changed."
     return save_with_backup(full, rel, content)
@@ -890,7 +978,7 @@ def edit_file(path, old_text, new_text):
         return f"Error: old_text occurs {count} times. Give more surrounding text so the passage is unique."
     new = old.replace(old_text, new_text, 1)
     show_all = diff_card(f"changes {rel}", old, new)
-    if not confirm("Change?", show_all):
+    if not confirm("Change?", show_all, auto_ok=True):
         print()
         return "The user declined the change. The file was not changed."
     return save_with_backup(full, rel, new)
@@ -942,7 +1030,7 @@ def write_docx(path, content):
     full, rel = check_target(path, {".docx"})
     replaces = " (replaces the existing one)" if os.path.exists(full) else ""
     show_all = preview(f"Word document {rel}{replaces}", content.splitlines())
-    if not confirm("Create?", show_all):
+    if not confirm("Create?", show_all, auto_ok=True):
         print()
         return "The user declined. No document was created."
     with tempfile.TemporaryDirectory() as tmp:
@@ -983,7 +1071,7 @@ def write_pdf(path, content):
     full, rel = check_target(path, {".pdf"})
     replaces = " (replaces the existing one)" if os.path.exists(full) else ""
     show_all = preview(f"PDF {rel}{replaces}", content.splitlines())
-    if not confirm("Create?", show_all):
+    if not confirm("Create?", show_all, auto_ok=True):
         print()
         return "The user declined. No PDF was created."
     with tempfile.TemporaryDirectory() as tmp:
@@ -994,6 +1082,206 @@ def write_pdf(path, content):
                        capture_output=True, timeout=120, check=True)
         if not os.path.exists(out):
             return "Error: the PDF could not be created."
+        return save_with_backup(full, rel, source_file=out)
+
+
+XLSX_FUNCTIONS = {"SUM", "AVERAGE", "MIN", "MAX", "COUNT", "ROUND", "ABS"}
+MAX_XLSX_ROWS, MAX_XLSX_COLS = 20_000, 200
+XML_INVALID = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+
+
+def safe_formula(text):
+    """True for simple arithmetic on cells of the same sheet (=SUM(B2:B9), =B2*C2). Anything else - other sheets or
+    files, links, functions that fetch data or start programs - is written as plain text instead."""
+    if not text.startswith("=") or len(text) > 500:
+        return False
+    rest = re.sub(r"\$?[A-Z]{1,3}\$?[0-9]{1,7}", "", text[1:].upper())
+    rest = re.sub(r"\b(" + "|".join(XLSX_FUNCTIONS) + r")\(", "(", rest)
+    return bool(re.fullmatch(r"[0-9+\-*/().,:; ]*", rest))
+
+
+def column_name(i):
+    name = ""
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        name = chr(65 + r) + name
+    return name
+
+
+def cell_number(value):
+    """The number in a cell as write_xlsx stores it, or None for text and empty cells."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value if math.isfinite(value) else None
+    text = str(value).strip()
+    return float(text) if re.fullmatch(r"-?\d+(\.\d+)?", text) and len(text) < 16 else None
+
+
+def formula_values(rows):
+    """{cell reference: value} for the safe formulas of a sheet, computed the way Excel does for these few
+    functions - stored with the formula, so the result shows in previews and when Flashcat reads the file."""
+    cells = {f"{column_name(c)}{r}": v for r, row in enumerate(rows, 1) for c, v in enumerate(row)}
+    results, busy = {}, set()
+
+    def ref_parts(ref):
+        m = re.fullmatch(r"\$?([A-Z]{1,3})\$?([0-9]{1,7})", ref)
+        col = 0
+        for ch in m.group(1):
+            col = col * 26 + ord(ch) - 64
+        return col - 1, int(m.group(2))
+
+    def value(ref):
+        ref = ref.replace("$", "")
+        if ref in results:
+            return results[ref]
+        v = cells.get(ref)
+        if isinstance(v, str) and safe_formula(v.strip()):
+            if ref in busy:
+                raise ValueError("circular")
+            busy.add(ref)
+            results[ref] = evaluate(v.strip()[1:])
+            busy.discard(ref)
+            return results[ref]
+        return cell_number(v)
+
+    def cell_range(a, b):
+        (c1, r1), (c2, r2) = ref_parts(a), ref_parts(b)
+        return [value(f"{column_name(c)}{r}") for r in range(min(r1, r2), max(r1, r2) + 1)
+                for c in range(min(c1, c2), max(c1, c2) + 1)]
+
+    functions = {"SUM": lambda *a: sum(nums(a)), "MIN": lambda *a: min(nums(a)), "MAX": lambda *a: max(nums(a)),
+                 "COUNT": lambda *a: len(nums(a)), "AVERAGE": lambda *a: sum(nums(a)) / len(nums(a)),
+                 "ABS": lambda x: abs(x), "ROUND": lambda x, d=0: round(x, int(d))}
+
+    def nums(args):
+        out = []
+        for a in args:
+            out += [x for x in (a if isinstance(a, list) else [a]) if isinstance(x, (int, float))]
+        return out
+
+    def evaluate(formula):
+        expr = re.sub(r"(\$?[A-Z]{1,3}\$?[0-9]{1,7}):(\$?[A-Z]{1,3}\$?[0-9]{1,7})", r'RANGE("\1","\2")',
+                      formula.upper().replace(";", ","))
+        expr = re.sub(r'(?<!")\b(\$?[A-Z]{1,3}\$?[0-9]{1,7})\b(?!")', r'CELL("\1")', expr)
+        return walk(ast.parse(expr, mode="eval").body)
+
+    ops = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b, ast.Mult: lambda a, b: a * b,
+           ast.Div: lambda a, b: a / b}
+
+    def walk(node):  # only numbers, + - * /, and the few functions - nothing else is evaluated
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            v = walk(node.operand)
+            return -v if isinstance(node.op, ast.USub) else v
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            a, b = walk(node.left), walk(node.right)
+            return ops[type(node.op)](a or 0, b or 0)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+            name = node.func.id
+            if name in ("CELL", "RANGE"):
+                refs = [a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+                return value(refs[0]) if name == "CELL" else cell_range(*refs)
+            if name in functions:
+                return functions[name](*[walk(a) for a in node.args])
+        raise ValueError("not supported")
+
+    for ref, v in cells.items():
+        if isinstance(v, str) and safe_formula(v.strip()):
+            try:
+                value(ref)
+            except Exception:  # an error in Excel too (division by zero, …): Excel computes it when opened
+                results.pop(ref, None)
+    return results
+
+
+def xlsx_cell(ref, value, style, computed=None):
+    s = f' s="1"' if style else ""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        value = "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return f'<c r="{ref}"{s}><v>{value!r}</v></c>'
+    text = XML_INVALID.sub("", str(value))
+    if re.fullmatch(r"-?\d+(\.\d+)?", text.strip()) and len(text.strip()) < 16:
+        return f'<c r="{ref}"{s}><v>{text.strip()}</v></c>'
+    if safe_formula(text.strip()):
+        cached = f"<v>{computed!r}</v>" if isinstance(computed, (int, float)) and math.isfinite(computed) else ""
+        return f'<c r="{ref}"{s}><f>{html.escape(text.strip()[1:], quote=False)}</f>{cached}</c>'
+    return (f'<c r="{ref}"{s} t="inlineStr"><is><t xml:space="preserve">{html.escape(text, quote=False)}</t>'
+            f'</is></c>')
+
+
+def xlsx_bytes(rows, sheet):
+    """The files of a minimal .xlsx workbook: one sheet, bold first row, column widths from the content."""
+    widths = {}
+    lines = []
+    computed = formula_values(rows)
+    for r, row in enumerate(rows, 1):
+        cells = []
+        for c, value in enumerate(row):
+            widths[c] = max(widths.get(c, 0), min(60, len(str(value if value is not None else ""))))
+            ref = f"{column_name(c)}{r}"
+            cells.append(xlsx_cell(ref, value, r == 1, computed.get(ref)))
+        lines.append(f'<row r="{r}">{"".join(cells)}</row>')
+    cols = "".join(f'<col min="{c + 1}" max="{c + 1}" width="{max(8, w + 2)}" customWidth="1"/>'
+                   for c, w in sorted(widths.items()))
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    rel_ns = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    pkg = "http://schemas.openxmlformats.org/package/2006/relationships"
+    office = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    ct = "application/vnd.openxmlformats-officedocument.spreadsheetml"
+    return {
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            f'<Override PartName="/xl/workbook.xml" ContentType="{ct}.sheet.main+xml"/>'
+            f'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="{ct}.worksheet+xml"/>'
+            f'<Override PartName="/xl/styles.xml" ContentType="{ct}.styles+xml"/></Types>',
+        "_rels/.rels": f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{pkg}">'
+            f'<Relationship Id="rId1" Type="{office}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook {ns} {rel_ns}>'
+            f'<sheets><sheet name="{html.escape(sheet)}" sheetId="1" r:id="rId1"/></sheets>'
+            '<calcPr fullCalcOnLoad="1"/></workbook>',
+        "xl/_rels/workbook.xml.rels": f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{pkg}">'
+            f'<Relationship Id="rId1" Type="{office}/worksheet" Target="worksheets/sheet1.xml"/>'
+            f'<Relationship Id="rId2" Type="{office}/styles" Target="styles.xml"/></Relationships>',
+        "xl/styles.xml": f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet {ns}>'
+            '<fonts count="2"><font><sz val="12"/><name val="Calibri"/></font>'
+            '<font><b/><sz val="12"/><name val="Calibri"/></font></fonts>'
+            '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+        "xl/worksheets/sheet1.xml": f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet {ns}>'
+            f'{"<cols>" + cols + "</cols>" if cols else ""}<sheetData>{"".join(lines)}</sheetData></worksheet>',
+    }
+
+
+def write_xlsx(path, rows, sheet="Sheet1"):
+    full, rel = check_target(path, {".xlsx"})
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, list) for r in rows):
+        return "Error: rows must be a list of rows, each a list of cells."
+    if len(rows) > MAX_XLSX_ROWS or max(len(r) for r in rows) > MAX_XLSX_COLS:
+        return f"Refused: at most {MAX_XLSX_ROWS} rows and {MAX_XLSX_COLS} columns."
+    sheet = re.sub(r"[\[\]:*?/\\]", " ", clean(str(sheet or "Sheet1"))).strip()[:31] or "Sheet1"
+    replaces = " (replaces the existing one)" if os.path.exists(full) else ""
+    shown = [" │ ".join("" if v is None else str(v) for v in row) for row in rows]
+    show_all = preview(f"Excel workbook {rel}{replaces} · {plural(len(rows), 'row')}", shown)
+    if not confirm("Create?", show_all, auto_ok=True):
+        print()
+        return "The user declined. No workbook was created."
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "book.xlsx")
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, text in xlsx_bytes(rows, sheet).items():
+                z.writestr(name, text)
         return save_with_backup(full, rel, source_file=out)
 
 
@@ -1038,7 +1326,7 @@ def move_file(source, destination):
     if not confirm("Rename?" if rename else "Move?"):
         print()
         return "The user declined. Nothing was moved."
-    journal.append({"type": "move", **do_move(src, dst, src_rel, dst_rel)})
+    journal.append({"type": "move", **do_move(src, dst, src_rel, dst_rel), "turn": state.get("turn_id")})
     print(f"  {GREEN}✓{RESET} {DIM}moved:{RESET} {src_rel} {DIM}→{RESET} {file_link(dst_rel)}")
     return f"Moved: {src_rel} → {dst_rel}"
 
@@ -1090,7 +1378,7 @@ def move_files(moves):
             done.append(do_move(*step))
     finally:
         if done:
-            journal.append({"type": "batch", "moves": done})
+            journal.append({"type": "batch", "moves": done, "turn": state.get("turn_id")})
     print(f"  {GREEN}✓{RESET} {DIM}moved:{RESET} {plural(len(done), 'item')}")
     return f"Moved {plural(len(done), 'item')}:\n" + "\n".join(f"{d['src_rel']} → {d['dst_rel']}" for d in done)
 
@@ -1113,19 +1401,35 @@ def undo():
         return None
     e = journal[-1]
     desc = describe(e)
-    if not valid_journal_entry(e):
-        # e.g. a command replaced the file by a link since: undoing would write to the place it points to
-        print("Not possible: a file or folder of this change now leads outside the start folder (a link).\n")
+    problem = undo_problem(e)
+    if problem:
+        print(problem + "\n")
         return None
     if not confirm(f"Undo: {desc}?"):
         print()
         return None
+    undo_entry(e)
+    print(f"  {GREEN}✓{RESET} {DIM}undone:{RESET} {desc}\n")
+    return desc
+
+
+def undo_problem(e):
+    """Why journal entry `e` cannot be undone now, or ''."""
+    if not valid_journal_entry(e):
+        # e.g. a command replaced the file by a link since: undoing would write to the place it points to
+        return "Not possible: a file or folder of this change now leads outside the start folder (a link)."
     if e["type"] in ("move", "batch"):
         moves = e["moves"] if e["type"] == "batch" else [e]
         blocked = [m["src_rel"] for m in moves if os.path.lexists(m["src"]) or not os.path.lexists(m["dst"])]
         if blocked:
-            print(f"Not possible: {blocked[0]} exists again by now (or its moved version is gone).\n")
-            return None
+            return f"Not possible: {blocked[0]} exists again by now (or its moved version is gone)."
+    return ""
+
+
+def undo_entry(e):
+    """Reverts journal entry `e` (the newest one; checked with undo_problem first) and removes it."""
+    if e["type"] in ("move", "batch"):
+        moves = e["moves"] if e["type"] == "batch" else [e]
         for m in reversed(moves):
             os.makedirs(os.path.dirname(m["src"]), exist_ok=True)
             shutil.move(m["dst"], m["src"])
@@ -1137,8 +1441,37 @@ def undo():
         backup_copy(e["full"], e["rel"], "removed", move=True)
     journal.pop()
     stats["undone"] += 1
-    print(f"  {GREEN}✓{RESET} {DIM}undone:{RESET} {desc}\n")
-    return desc
+
+
+def rewind():
+    """Reverts every change of the last question that changed something, after one confirmation. Returns the
+    descriptions of what was undone (newest first), or []."""
+    if not journal:
+        print("Nothing has been changed in this chat that could be undone.\n")
+        return []
+    turn = journal[-1].get("turn")
+    entries = [journal[-1]]
+    for e in reversed(journal[:-1]):
+        if turn is None or e.get("turn") != turn:
+            break
+        entries.append(e)
+    print()
+    print(card(f"{ORANGE}undoes your last question's changes{RESET}",
+               [f"{DIM}{i}.{RESET} {describe(e)}" for i, e in enumerate(entries, 1)]))
+    if not confirm(f"Undo {plural(len(entries), 'change')}?"):
+        print()
+        return []
+    done = []
+    for e in entries:
+        problem = undo_problem(e)
+        if problem:
+            print(f"  {RED}✗{RESET} {problem} {DIM}Stopped here – {plural(len(done), 'change')} undone.{RESET}")
+            break
+        undo_entry(e)
+        done.append(describe(e))
+        print(f"  {GREEN}✓{RESET} {DIM}undone:{RESET} {done[-1]}")
+    print()
+    return done
 
 
 def show_journal():
@@ -1196,7 +1529,7 @@ def any_case(text):
     return "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else sb_regex(c) for c in text)
 
 
-def sandbox_profile(own_tmp):
+def sandbox_profile(own_tmp, port=None):
     """macOS sandbox for run_command: no network, writing only in the start folder (not its backups) and the
     command's own temporary folder `own_tmp`, no reading of user files outside the start folder (home folders, other
     users, external drives, other apps' temporary files - system files and developer tools stay readable), private
@@ -1215,6 +1548,12 @@ def sandbox_profile(own_tmp):
         "(version 1)",
         "(allow default)",
         "(deny network*)",
+    ] + ([
+        # a server started with start_server may listen on its one port - nothing else, and still no outgoing
+        # connections (so nothing can be sent out)
+        f'(allow network-bind (local ip "*:{int(port)}"))',
+        f'(allow network-inbound (local ip "*:{int(port)}"))',
+    ] if port else []) + [
         "(deny lsopen)",
         "(deny appleevent-send)",
         # System services act for a command outside the sandbox (clipboard, keychain, opening apps, Shortcuts,
@@ -1262,7 +1601,7 @@ def command_env(own_tmp, run_id):
     env = dict(os.environ)
     env.pop("FLASHCAT_API_KEY", None)
     env.update(PAGER="cat", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0", NO_COLOR="1", TERM="dumb",
-               TMPDIR=own_tmp + "/", FLASHCAT_RUN=run_id, HOME=HOME)
+               TMPDIR=own_tmp + "/", TMPPREFIX=own_tmp + "/zsh", FLASHCAT_RUN=run_id, HOME=HOME)  # TMPPREFIX: zsh's here documents
     return env
 
 
@@ -1531,9 +1870,8 @@ def _run_sandboxed(command, timeout, own_tmp, run_id, git_before):
                body))
     note = ""
     if SERVER_BLOCKED.search(output):
-        note = (" The command tried to start a server (listen on a port). Servers cannot run here: commands have no "
-                "network and nothing keeps running after a command. Tell the user to start it themselves in another "
-                "terminal window in this folder, or run a build command that finishes instead.")
+        note = (" The command tried to start a server (listen on a port). run_command cannot do that: nothing keeps "
+                "running after a command. Start it with start_server instead (the user confirms).")
     elif "sandbox_apply: Operation not permitted" in output:
         note = (" The program tried to start a sandbox of its own, which is not possible inside this one. Try its "
                 "option to switch that off (Swift: swift build --disable-sandbox).")
@@ -1543,6 +1881,168 @@ def _run_sandboxed(command, timeout, own_tmp, run_id, git_before):
     note += check_git_settings(git_before)
     return (f"Exit code: {code}" + (f" (stopped after {timeout} s)" if timed_out else "") + note + "\n"
             + (shorten_output(output) or "(no output)"))
+
+
+# ---------- a server that keeps running (start_server) ----------
+
+server = {}  # the running server: proc, port, command, run_id, own_tmp, output (lines), reader
+MAX_SERVER_LINES = 400
+SERVER_WAIT = 15  # seconds start_server waits for the port
+
+
+def listening(port):
+    """The addresses on which something listens on `port` (e.g. ['127.0.0.1', '*']), from lsof."""
+    try:
+        out = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-Fn"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line[1:].rpartition(":")[0].strip("[]") for line in out.splitlines() if line.startswith("n")]
+
+
+def only_this_mac(addresses):
+    return all(a in ("127.0.0.1", "::1", "localhost") or a.startswith("127.") for a in addresses)
+
+
+def server_output(limit=4000):
+    text = clean(TERMINAL_CODES.sub("", "".join(server.get("output", [])))).strip()
+    return ("…" + text[-limit:]) if len(text) > limit else text
+
+
+def server_note_file():
+    return os.path.join(ACTIVE_DIR, f"devserver.{os.getpid()}")
+
+
+def start_server(command, port):
+    command = str(command or "").strip()
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return "Error: port must be a number."
+    if not command:
+        return "Error: the command is empty."
+    if len(command) > MAX_COMMAND:
+        return f"Refused: the command is longer than {MAX_COMMAND} characters."
+    if not 1024 <= port <= 65535:
+        return "Refused: the port must be between 1024 and 65535."
+    if server:
+        return f"Error: a server is running already (port {server['port']}). Stop it with stop_server first."
+    if listening(port):
+        return f"Error: port {port} is used by another program already. Choose another port."
+    if not os.path.exists("/usr/bin/sandbox-exec"):
+        return "Error: servers cannot run here (the macOS sandbox is missing)."
+    ui_break()
+    lines = [f"{BOLD}{piece}{RESET}" for piece in clean(command).splitlines() or [""]]
+    lines.append(f"{DIM}listens on port {port} · sandbox: no internet, writes only in this folder · runs until "
+                 f"/stop or the end of the chat{RESET}")
+    print()
+    print(card(f"{ORANGE}starts a server{RESET}", lines))
+    if not confirm("Start?"):
+        print()
+        return "The user declined. The server was not started."
+    os.makedirs(os.path.join(ROOT, BACKUP_DIR), exist_ok=True)
+    own_tmp = os.path.realpath(tempfile.mkdtemp(prefix="flashcat-server-"))
+    run_id = os.urandom(8).hex()
+    proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", sandbox_profile(own_tmp, port), "/bin/zsh", "-f", "-c",
+                             command], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True, env=command_env(own_tmp, run_id))
+    output = []
+
+    def reader():
+        for raw in iter(lambda: proc.stdout.readline(), b""):
+            output.append(raw.decode("utf-8", errors="replace"))
+            del output[:-MAX_SERVER_LINES]
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    server.update(proc=proc, port=port, command=command, run_id=run_id, own_tmp=own_tmp, output=output, reader=t,
+                  started=time.time())
+    try:  # the launcher's cleanup stops it if this chat ends without stopping it (window closed)
+        os.makedirs(ACTIVE_DIR, exist_ok=True)
+        with open(server_note_file(), "w") as f:
+            f.write(run_id + "\n")
+    except OSError:
+        pass
+    stats["servers"] = stats.get("servers", 0) + 1
+    addresses = []
+    try:
+        for _ in range(SERVER_WAIT * 4):
+            if proc.poll() is not None:
+                break
+            addresses = listening(port)
+            if addresses:
+                break
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        stop_server(quiet=True)
+        raise
+    if proc.poll() is not None:
+        t.join(2)
+        out = server_output()
+        code = proc.returncode
+        stop_server(quiet=True)
+        print(f"  {RED}✗{RESET} {DIM}the server ended at once (exit code {code}){RESET}")
+        return f"The server ended at once with exit code {code}.\n" + (out or "(no output)")
+    if addresses and not only_this_mac(addresses):
+        print()
+        print(card(f"{RED}! open to your network{RESET}", [
+            f"It listens on {', '.join(sorted(set(addresses)))}:{port} – other devices in your network (Wi-Fi)",
+            "can open it too, not only this Mac. Usually there is an option to listen on localhost only.",
+            f"{DIM}It still cannot send anything out (no internet).{RESET}"], color=RED))
+        if not confirm(f"{RED}Keep it running?{RESET}"):
+            out = server_output()
+            stop_server(quiet=True)
+            print()
+            return ("The user stopped the server: it was reachable from other devices in the network (it listened on "
+                    f"all addresses). Start it so that it listens on localhost / 127.0.0.1 only.\n{out}")
+    url = f"http://localhost:{port}"
+    print(f"  {GREEN}✓{RESET} {DIM}server running:{RESET} {link(url, url)}{DIM}  · /stop stops it{RESET}"
+          if addresses else f"  {YELLOW}◇{RESET} {DIM}server started, not listening on port {port} yet{RESET}")
+    state_line = (f"The server is running and listens on port {port} ({url}). You can open its pages with fetch_url."
+                  if addresses else f"The server is running but does not listen on port {port} yet (maybe another "
+                  "port, or it is still starting).")
+    return state_line + "\nOutput so far:\n" + (server_output() or "(none)")
+
+
+def stop_server(quiet=False):
+    """Stops the running server (with everything it started) and returns its last output."""
+    if not server:
+        return "No server is running."
+    proc = server["proc"]
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(3)
+    except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+        pass
+    stop_leftovers(proc, server["run_id"])
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        pass
+    server["reader"].join(2)
+    proc.stdout.close()
+    out = server_output()
+    shutil.rmtree(server["own_tmp"], ignore_errors=True)
+    try:
+        os.remove(server_note_file())
+    except OSError:
+        pass
+    port = server["port"]
+    server.clear()
+    if not quiet:
+        ui_break()
+        print(f"  {GREEN}✓{RESET} {DIM}server on port {port} stopped{RESET}")
+    return f"The server on port {port} was stopped. Last output:\n" + (out or "(none)")
+
+
+def own_server_url(url):
+    """True for an address of the server started with start_server (http://localhost:<its port>/…)."""
+    parsed = urllib.parse.urlparse(url)
+    try:
+        return bool(server) and parsed.scheme == "http" and parsed.port == server["port"] and \
+            (parsed.hostname or "").lower() in ("localhost", "127.0.0.1", "::1")
+    except ValueError:
+        return False
 
 
 # ---------- images and web ----------
@@ -1593,6 +2093,8 @@ class _TextExtractor(html.parser.HTMLParser):
 
 def check_public_url(url):
     """Refuses URLs that point to this Mac or the local network (localhost, 192.168.x.x, 10.x.x.x, …)."""
+    if own_server_url(url):  # the user's own server, started with start_server: nothing leaves the Mac
+        return
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("Only http and https addresses are allowed.")
@@ -1648,7 +2150,7 @@ def fetch_url(url):
     if not re.match(r"^https?://", url):
         return "Error: only http and https addresses are allowed."
     # the public-address check runs in http_get, after the OK: already its DNS lookup could carry data out
-    if not confirm_web("Address", url):
+    if not own_server_url(url) and not confirm_web("Address", url):
         return WEB_DENIED
     ctype, text = http_get(url)
     if "html" in ctype or text.lstrip().lower().startswith(("<!doctype", "<html")):
@@ -1683,7 +2185,8 @@ def web_search(query):
 
 
 FUNCS = {"list_dir": list_dir, "project_overview": project_overview, "read_file": read_file, "search": search, "write_file": write_file,
-         "edit_file": edit_file, "write_docx": write_docx, "write_pdf": write_pdf, "move_file": move_file,
+         "edit_file": edit_file, "write_docx": write_docx, "write_pdf": write_pdf, "write_xlsx": write_xlsx,
+         "move_file": move_file, "start_server": start_server, "stop_server": stop_server,
          "move_files": move_files, "run_command": run_command, "view_image": view_image, "web_search": web_search,
          "fetch_url": fetch_url}
 
@@ -1693,7 +2196,7 @@ FUNCS = {"list_dir": list_dir, "project_overview": project_overview, "read_file"
 INTERNAL_REPLIES = ("Understood.", "All right, I have the conversation so far in mind.")
 state = {"thinking": False, "context": 32768, "used": 0, "last_answer": "", "tok_s": 0.0, "turn_start": 0.0,
          "phase": "thinking", "tools_shown": False, "plan": False, "changed_in_turn": False, "finish": "",
-         "turn_message": None}
+         "turn_message": None, "turn_id": None, "auto": False, "say_auto": False}
 # for the receipt shown when the chat ends
 stats = {"start": time.time(), "questions": 0, "created": set(), "changed": set(), "moved": 0, "undone": 0,
          "commands": 0}
@@ -2186,6 +2689,7 @@ def spin(done):
 
 TOOL_VERBS = {"list_dir": "looks into", "project_overview": "gets an overview of", "read_file": "reads", "search": "searches", "write_file": "writes",
               "edit_file": "changes", "write_docx": "creates Word document", "write_pdf": "creates PDF",
+              "write_xlsx": "creates Excel workbook", "start_server": "starts a server:", "stop_server": "stops the server",
               "move_file": "moves", "move_files": "moves", "run_command": "runs", "view_image": "looks at",
               "web_search": "searches the web for", "fetch_url": "opens"}
 # plan mode: the model may look, search and read the web (asked as always), but not change or run anything
@@ -2196,7 +2700,8 @@ PLAN_NOTE = ("\n\nPLAN MODE is on: the user wants a plan before anything is chan
              "lines or functions), in which order, and how to check the result - and stop. You cannot change, "
              "create or move files or run commands now. The user switches plan mode off with /plan when you may "
              "carry it out.")
-INTERACTIVE_TOOLS = {"write_file", "edit_file", "write_docx", "write_pdf", "move_file", "move_files", "run_command"}
+INTERACTIVE_TOOLS = {"write_file", "edit_file", "write_docx", "write_pdf", "write_xlsx", "move_file", "move_files",
+                     "run_command", "start_server", "stop_server"}
 tool_line = {"open": False, "text": ""}
 
 
@@ -2238,7 +2743,9 @@ def run_tool(call):
     short = raw if len(raw) <= room else raw[: room - 1] + "…"
     if name in ("search", "web_search"):
         target = f"“{short}”"
-    elif name in ("run_command", "move_files"):
+    elif name == "stop_server":
+        target = ""
+    elif name in ("run_command", "move_files", "start_server"):
         target = short
     elif name == "fetch_url":
         target = urllib.parse.urlparse(raw).netloc or short
@@ -2249,7 +2756,8 @@ def run_tool(call):
     else:
         target = link(short, os.path.join(ROOT, raw)) if os.path.exists(os.path.join(ROOT, raw)) else short
     text = f"  {DIM}◇{RESET} {verb} {target}"
-    if name not in ("search", "web_search", "fetch_url", "run_command", "move_files") and private_item(os.path.realpath(os.path.join(ROOT, raw))):
+    if name not in ("search", "web_search", "fetch_url", "run_command", "move_files", "start_server",
+                    "stop_server") and private_item(os.path.realpath(os.path.join(ROOT, raw))):
         text = f"  {RED}◇ {verb} {short} · private{RESET}"
     print(text, end="", flush=True)
     tool_line.update(open=True, text=text)
@@ -2554,6 +3062,8 @@ def receipt():
         parts.append(f"{stats['undone']} undone")
     if stats["commands"]:
         lines.append(plural(stats["commands"], "command") + " run")
+    if stats.get("servers"):
+        lines.append(plural(stats["servers"], "server") + " started (stopped again)")
     if parts:
         lines.append("Files: " + " · ".join(parts))
         names = sorted(stats["created"] | stats["changed"])
@@ -2648,7 +3158,9 @@ def read_input():
     # orange ❯ like Claude (macOS' libedit moves marked-invisible color codes, so they are left unmarked)
     watcher = PasteWatcher()
     try:
-        first = input((f"{BLUE}plan{RESET} " if state["plan"] else "") + f"{ORANGE}❯{RESET} ")
+        first = input((f"{DIM}:{server['port']}{RESET} " if server else "")
+                      + (f"{YELLOW}auto{RESET} " if state["auto"] else "")
+                      + (f"{BLUE}plan{RESET} " if state["plan"] else "") + f"{ORANGE}❯{RESET} ")
     finally:
         watcher.stop()
     if first.strip() == '"""':
@@ -2666,8 +3178,9 @@ def read_input():
     return "\n".join(lines).replace(PASTE_START, "").replace(PASTE_END, "").strip()
 
 
-COMMANDS = ["/help", "/undo", "/copy", "/save", "/export", "/paste", "/remember", "/resume", "/clear", "/compact",
-            "/context", "/think", "/plan", "/model", "/test", "/command", "/exit"]
+COMMANDS = ["/help", "/undo", "/rewind", "/auto", "/copy", "/save", "/export", "/paste", "/remember", "/resume",
+            "/clear", "/compact", "/context", "/think", "/plan", "/model", "/test", "/review", "/commit", "/stop",
+            "/say", "/command", "/exit"]
 COMMAND_ALIASES = {"/?": "/help", "/quit": "/exit", "/commands": "/command", "/models": "/model"}
 
 # ---------- your own commands: ~/.flashcat/commands/<name>.md, used as /<name> ----------
@@ -2844,8 +3357,10 @@ def loaded_by_flashcat():
 def switch_model(want):
     """/model: lists the installed models, or loads another one for this chat (the chat itself stays)."""
     global MODEL, MODEL_NAME
+    if BACKEND == "llamacpp":
+        return switch_llamacpp(want)
     if BACKEND != "lmstudio":
-        print("Changing the model inside the chat works with LM Studio only. Otherwise: /exit, then\n"
+        print("Changing the model inside the chat works with LM Studio and llama.cpp. Otherwise: /exit, then\n"
               "flashcat --model <name> --continue\n")
         return
     keys = installed_models()
@@ -2886,6 +3401,129 @@ def switch_model(want):
     state.update(context=loaded_context_length(), no_reasoning_effort=False)
     kept = "" if unload else f" · {clean(old)} stays loaded"
     print(f"  {GREEN}✓{RESET} {DIM}now using {pretty_model()} · {round(state['context'] / 1024)}k context{kept}{RESET}\n")
+
+
+LLAMACPP_DIRS = [os.path.join(HOME, ".lmstudio", "models"), os.path.join(HOME_DIR, "models")]
+
+
+def gguf_models():
+    """{name: (model file, image part or None)} of the .gguf files llama.cpp can run - like the launcher."""
+    found = {}
+    for top in LLAMACPP_DIRS:
+        for folder, dirs, names in os.walk(top):
+            dirs.sort()
+            for n in sorted(names):
+                if n.lower().endswith(".gguf") and "mmproj" not in n.lower():
+                    parts = sorted(m for m in names if m.lower().endswith(".gguf") and "mmproj" in m.lower())
+                    found.setdefault(n[:-5], (os.path.join(folder, n), os.path.join(folder, parts[0]) if parts else None))
+    return found
+
+
+def llamacpp_note():
+    """(pid, port, model) of the llama-server the launcher started, or None."""
+    try:
+        with open(os.path.join(ACTIVE_DIR, "llamacpp"), encoding="utf-8") as f:
+            pid, port, model = f.read().split("\n")[:3]
+        command = subprocess.run(["ps", "-p", pid, "-o", "command="], capture_output=True, text=True, timeout=5).stdout
+        # the pid may belong to another program by now
+        return (int(pid), int(port), model) if re.search(r"(^|/)llama-server(\s|$)", command) else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def start_llama_server(name, files, port, context):
+    """Starts llama-server like the launcher does and waits until it answers. Returns its pid or None."""
+    model, image_part = files
+    log = open(os.path.join(HOME_DIR, "llama-server.log"), "w")
+    args = [shutil.which("llama-server") or "llama-server", "-m", model] + (["--mmproj", image_part] if image_part else [])
+    proc = subprocess.Popen(args + ["-c", str(context), "-np", "1", "--alias", name, "--host", "127.0.0.1",
+                                    "--port", str(port), "--offline", "--no-webui"],
+                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    log.close()
+    for _ in range(1200):
+        if proc.poll() is not None:
+            return None
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
+                if r.status == 200:
+                    return proc.pid
+        except Exception:
+            pass
+        time.sleep(0.5)
+    proc.kill()
+    return None
+
+
+def stop_pid(pid):
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(100):
+        try:
+            os.waitpid(pid, os.WNOHANG)  # a server started from this chat would otherwise stay as a zombie
+        except ChildProcessError:
+            pass
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def switch_llamacpp(want):
+    """/model with llama.cpp: restarts the model server with another model file (the chat itself stays)."""
+    global MODEL, MODEL_NAME
+    models = gguf_models()
+    if not want:
+        for k in sorted(models):
+            print(f"  {ORANGE + '●' + RESET if k == MODEL else ' '} {clean(k)}")
+        print(f"{DIM}  /model <name> switches (part of the name is enough){RESET}\n")
+        return
+    hits = [k for k in models if k.lower() == want.lower()] or [k for k in models if want.lower() in k.lower()]
+    if len(hits) != 1:
+        print(f"No unique model matches '{clean(want)}'. /model lists the installed ones.\n")
+        return
+    new, old = hits[0], MODEL
+    if new == old:
+        print(f"{clean(new)} is the current model already.\n")
+        return
+    note = llamacpp_note()
+    if not note:
+        print("The model server was not started by Flashcat, so Flashcat does not restart it. /exit, then\n"
+              f"flashcat --model {clean(new)} --continue\n")
+        return
+    if other_windows():
+        print("Another Flashcat window uses the model server – llama.cpp runs one model at a time.\n"
+              "Close the other window first.\n")
+        return
+    pid, port, _ = note
+    context = os.environ.get("FLASHCAT_CONTEXT") or str(state["context"])
+    print(f"  {DIM}loading {clean(new)} …{RESET}", flush=True)
+    stop_pid(pid)  # one model at a time: two large ones rarely fit into memory
+    new_pid = start_llama_server(new, models[new], port, context)
+    if not new_pid:
+        back = start_llama_server(old, models[old], port, context) if old in models else None
+        if back:
+            write_llamacpp_note(back, port, old)
+        print(f"  {RED}✗{RESET} {clean(new)} could not be loaded"
+              + (f" – back to {clean(old)}.\n" if back else f". Details: ~/.flashcat/llama-server.log\n"))
+        return
+    write_llamacpp_note(new_pid, port, new)
+    MODEL = MODEL_NAME = new
+    state.update(context=loaded_context_length(), no_reasoning_effort=False, used=0)
+    print(f"  {GREEN}✓{RESET} {DIM}now using {pretty_model()} · {round(state['context'] / 1024)}k context{RESET}\n")
+
+
+def write_llamacpp_note(pid, port, model):
+    """The launcher's note, so its cleanup stops this server when the last window closes."""
+    os.makedirs(ACTIVE_DIR, exist_ok=True)
+    with open(os.path.join(ACTIVE_DIR, "llamacpp"), "w", encoding="utf-8") as f:
+        f.write(f"{pid}\n{port}\n{model}\n")
 
 
 def complete(text, i):
@@ -3262,6 +3900,8 @@ def attach_mentions(text):
 HELP_COMMANDS = [
     ("/help", "this overview", ""),
     ("/undo", "undo the last file change", "/undo list shows all"),
+    ("/rewind", "undo all changes of the last question", "one question, one step"),
+    ("/auto", "file changes without asking", "this chat only · /auto again: off"),
     ("/copy", "copy the last answer", ""),
     ("/save", "save the last answer as a file", "/save name.md"),
     ("/export", "save the whole chat as Markdown", "/export name.md"),
@@ -3275,6 +3915,10 @@ HELP_COMMANDS = [
     ("/plan", "plan first, change nothing", "/plan again switches it off"),
     ("/model", "installed models", "/model qwen switches"),
     ("/test", "test command after changes", "/test python3 -m unittest"),
+    ("/review", "review your uncommitted changes", "git repositories"),
+    ("/commit", "commit with a suggested message", "you confirm the message"),
+    ("/stop", "stop the server", "Flashcat starts it on request"),
+    ("/say", "read the last answer aloud", "/say on: every answer"),
     ("/command", "your own commands", "/command name prompt text"),
     ("/exit", "quit", "continue with flashcat --continue"),
     ("Esc", "cancel the answer", ""),
@@ -3315,6 +3959,189 @@ def show_help():
     print()
     print("\n".join(lines))
     print()
+
+
+# ---------- /say: answers read aloud by macOS ----------
+
+speech = {}
+
+
+def speakable(text):
+    """Markdown as plain sentences: no code, tables, links or marks."""
+    text = re.sub(r"```.*?(```|$)", " (code) ", text, flags=re.S)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", "", text, flags=re.M)  # table rules
+    text = re.sub(r"[`*_#>|]+", " ", text)
+    text = re.sub(r"\$\\[a-zA-Z]+\$", " ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def stop_speaking():
+    proc = speech.pop("proc", None)
+    if proc and proc.poll() is None:
+        proc.terminate()
+
+
+def speak(text):
+    stop_speaking()
+    text = speakable(text)
+    if not text or not shutil.which("say"):
+        return False
+    proc = subprocess.Popen(["say", "-f", "-"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    proc.stdin.write(text.encode())
+    proc.stdin.close()
+    speech["proc"] = proc
+    return True
+
+
+def say_command(arg, messages):
+    arg = arg.lower()
+    if arg in ("on", "off"):
+        state["say_auto"] = arg == "on"
+        print(f"Reading aloud is {'ON: every answer is read aloud' if arg == 'on' else 'OFF'}.\n")
+        if arg == "off":
+            stop_speaking()
+        return
+    if speech.get("proc") and speech["proc"].poll() is None:
+        stop_speaking()
+        print(f"{DIM}  stopped{RESET}\n")
+        return
+    text = last_answer(messages)
+    if not text:
+        print("There is no answer yet to read aloud.\n")
+    elif speak(text):
+        print(f"{DIM}  reading aloud … /say again stops{RESET}\n")
+
+
+# ---------- /review and /commit (git) ----------
+
+GIT = "git -c core.pager=cat -c core.fsmonitor=false -c diff.external= --no-pager"
+MAX_DIFF = 60_000
+
+
+def git_quiet(command, timeout=60):
+    """Runs a git command in the command sandbox without a card. Returns (exit code, output)."""
+    own_tmp = os.path.realpath(tempfile.mkdtemp(prefix="flashcat-git-"))
+    run_id = os.urandom(8).hex()
+    try:
+        proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", sandbox_profile(own_tmp), "/bin/zsh", "-f", "-c",
+                                 command], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True, env=command_env(own_tmp, run_id))
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            out = b""
+        stop_leftovers(proc, run_id)
+        return proc.wait(), clean(out.decode("utf-8", errors="replace"))
+    finally:
+        shutil.rmtree(own_tmp, ignore_errors=True)
+
+
+def git_changes(staged=False):
+    """(diff, list of changed files) of the repository in the start folder, or None when it is no repository."""
+    code, _ = git_quiet(f"{GIT} rev-parse --is-inside-work-tree")
+    if code != 0:
+        return None
+    _, status = git_quiet(f"{GIT} status --porcelain")
+    has_head = git_quiet(f"{GIT} rev-parse --verify -q HEAD")[0] == 0
+    if staged:
+        _, diff = git_quiet(f"{GIT} diff --no-ext-diff --no-textconv --no-color --cached")
+    else:
+        _, diff = git_quiet(f"{GIT} diff --no-ext-diff --no-textconv --no-color" + (" HEAD" if has_head else ""))
+    return diff, [line for line in status.splitlines() if line.strip()]
+
+
+def diff_attachment(diff, files):
+    if len(diff) > MAX_DIFF:
+        diff = diff[:MAX_DIFF] + f"\n… (shortened, only the first {MAX_DIFF} characters)"
+    return (f"\n\n--- git status ---\n" + "\n".join(files) + f"\n--- git diff ---\n{diff}\n--- End ---")
+
+
+def review(messages, extra=""):
+    changes = git_changes()
+    if changes is None:
+        print("The start folder is not a git repository.\n")
+        return messages
+    diff, files = changes
+    if not files:
+        print("Nothing to review: there are no uncommitted changes.\n")
+        return messages
+    question = ("/review: look through my uncommitted changes below. Name real problems first (bugs, mistakes, "
+                "risks, what is missing, e.g. tests), with file and line, then smaller points - briefly. Read the "
+                "files if you need more context. Do not change anything." + (f" Also: {extra}" if extra else ""))
+    return turn_from_command(messages, question, diff_attachment(diff, files))
+
+
+def turn_from_command(messages, question, attachment):
+    turn_start = len(messages)
+    try:
+        run_turn(messages, question, attachment=attachment)
+        save_session(messages)
+        show_context()
+    except KeyboardInterrupt:
+        del messages[turn_start:]
+        ui_break()
+        print(f"\n  {YELLOW}✗{RESET} {DIM}cancelled{RESET}\n")
+    return messages
+
+
+def commit_message(text):
+    """The model's answer as a commit message: without a code block around it or quotes."""
+    text = text.strip()
+    fence = re.match(r"^```[\w-]*\n(.*?)\n```$", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    return text.strip('"').strip()
+
+
+def commit(messages, hint=""):
+    changes = git_changes(staged=True)
+    if changes is None:
+        print("The start folder is not a git repository.\n")
+        return messages
+    diff, files = changes
+    if not files:
+        print("Nothing to commit: there are no changes.\n")
+        return messages
+    if not diff.strip():  # nothing staged yet
+        print()
+        print(card(f"{ORANGE}nothing is staged yet{RESET}", [clean(f) for f in files[:20]]
+                   + ([f"{DIM}… {plural(len(files) - 20, 'more file')}{RESET}"] if len(files) > 20 else [])))
+        if not confirm(f"Stage all {plural(len(files), 'change')} (git add -A)?"):
+            print()
+            return messages
+        code, out = git_quiet(f"{GIT} add -A")
+        if code != 0:
+            print(f"  {RED}✗{RESET} git add failed: {out.strip()[:300]}\n")
+            return messages
+        diff, files = git_changes(staged=True)
+    question = ("/commit: write a commit message for the staged changes below: a short first line (at most 72 "
+                "characters, what changed), then if useful a blank line and a few lines on what and why. Answer "
+                "with the message only - no code block, no other text." + (f" Note: {hint}" if hint else ""))
+    before = state["last_answer"]
+    messages = turn_from_command(messages, question, diff_attachment(diff, files))
+    message = commit_message(state["last_answer"]) if state["last_answer"] != before else ""
+    if not message:
+        print("No commit message – nothing was committed.\n")
+        return messages
+    print()
+    print(card(f"{ORANGE}commit message{RESET}", [clean(line) for line in message.splitlines()]))
+    if not confirm("Commit?"):
+        print()
+        return messages
+    end = "FLASHCAT_" + os.urandom(6).hex()
+    result = run_sandboxed(f"{GIT} commit -q -F - <<'{end}'\n{message}\n{end}", RUN_TIMEOUT)
+    if result.startswith("Exit code: 0"):
+        _, head = git_quiet(f"{GIT} log -1 --format=%h")
+        print(f"  {GREEN}✓{RESET} {DIM}committed:{RESET} {head.strip()} {clean(message.splitlines()[0])}\n")
+        messages += [{"role": "user", "content": f"(Info: I committed the staged changes as {head.strip()} with "
+                                                 "your message.)"},
+                     {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+        save_session(messages)
+    else:
+        print(f"  {RED}✗{RESET} {DIM}the commit failed – see above{RESET}\n")
+    return messages
 
 
 def chat_markdown(messages):
@@ -3440,6 +4267,36 @@ def handle_command(user, messages):
         command_command(arg)
     elif cmd == "/undo" and arg.lower() in ("list", "ls"):
         show_journal()
+    elif cmd == "/rewind":
+        done = rewind()
+        if done:
+            messages += [{"role": "user", "content": "(Info: I have undone all changes of my last request: "
+                                                     + "; ".join(done) + ".)"},
+                         {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+            save_session(messages)
+    elif cmd == "/auto":
+        state["auto"] = not state["auto"]
+        if state["auto"]:
+            print(f"Auto is ON: file changes in this chat are made without asking – you still see each one, and\n"
+                  f"/undo or /rewind brings the old version back. Moves, commands, internet and private data still "
+                  f"ask.\n{DIM}  /auto again switches it off.{RESET}\n")
+        else:
+            print("Auto is OFF: every change asks first again.\n")
+    elif cmd == "/stop":
+        if not server:
+            print("No server is running.\n")
+        else:
+            port = server["port"]
+            stop_server()
+            print()
+            messages += [{"role": "user", "content": f"(Info: I stopped the server on port {port}.)"},
+                         {"role": "assistant", "content": INTERNAL_REPLIES[0]}]
+    elif cmd == "/say":
+        say_command(arg, messages)
+    elif cmd == "/review":
+        messages = review(messages, arg)
+    elif cmd == "/commit":
+        messages = commit(messages, arg)
     elif cmd == "/undo":
         desc = undo()
         if desc:
@@ -3524,12 +4381,17 @@ def main():
     state["context"] = loaded_context_length()
     state["session"] = new_session_id()
     sessions = list_sessions()
+    for sig in (signal.SIGHUP, signal.SIGTERM):  # window closed: stop the server first (finally blocks run)
+        signal.signal(sig, lambda *_: sys.exit(129))
     if QUESTION:
         if RESUME and sessions:
             state["session"] = sessions[0][0]
             messages = messages[:1] + (sessions[0][1].get("messages") or [])
             journal.extend(e for e in sessions[0][1].get("journal") or [] if valid_journal_entry(e))
-        return one_shot(messages, answer_out)
+        try:
+            return one_shot(messages, answer_out)
+        finally:
+            stop_server(quiet=True)
     setup_completion()
     set_title(True)
     start_card(loaded, 0 if RESUME else len(sessions))
@@ -3543,6 +4405,9 @@ def main():
     try:
         chat_loop(messages)
     finally:
+        if server:
+            stop_server()
+        stop_speaking()
         receipt()
         set_title(False)
 
@@ -3709,7 +4574,9 @@ def save_shown_code(messages, answer, question=""):
 def run_turn(messages, user, show=True, attachment=""):
     """One question: sends it, runs the tools the model calls and appends everything to `messages`. `attachment`
     (piped input) is added as it is: @file and 📎 in it are not resolved - only the user's own words are."""
-    state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False, changed_in_turn=False)
+    state.update(turn_start=time.time(), tok_s=0.0, tools_shown=False, changed_in_turn=False,
+                 turn_id=os.urandom(6).hex())
+    stop_speaking()
     stats["questions"] += 1
     if show:
         print()
@@ -3760,6 +4627,8 @@ def run_turn(messages, user, show=True, attachment=""):
                     continue
             if show and not state["plan"] and len(journal) == written:
                 save_shown_code(messages, msg["content"], user)
+            if show and state["say_auto"] and msg["content"].strip():
+                speak(msg["content"])
             break
         room = int((state["context"] - state["used"] - RESERVED_TOKENS) * CHARS_PER_TOKEN) if state["used"] else MAX_READ * 4
         for c in msg["tool_calls"]:

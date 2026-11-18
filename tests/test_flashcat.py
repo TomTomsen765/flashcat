@@ -15,11 +15,14 @@ import pty
 import re
 import select
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.request
+import zipfile
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -353,15 +356,15 @@ class CommandTest(FlashcatTest):
     def test_server_gets_a_clear_hint(self):
         result = self.run_cmd("/usr/bin/python3 -m http.server 18765")
         self.assertIn("not permitted", result)
-        self.assertIn("Servers cannot run here", result)
+        self.assertIn("Start it with start_server", result)
         for output in ("[11ty] Server error: listen EPERM: operation not permitted 0.0.0.0:8080",
                        "listen tcp :8080: bind: operation not permitted"):
             result = self.run_cmd(f"echo '{output}'; exit 1")
-            self.assertIn("Servers cannot run here", result, output)
+            self.assertIn("Start it with start_server", result, output)
         # other blocked things keep the general hint, also when the program writes it in lower case
         result = self.run_cmd("echo 'EPERM: operation not permitted, open /x'; exit 1")
         self.assertIn("The sandbox blocked something", result)
-        self.assertNotIn("Servers cannot run here", result)
+        self.assertNotIn("Start it with start_server", result)
 
     def test_cannot_write_outside(self):
         target = os.path.join(self.outside, "new.txt")
@@ -510,6 +513,14 @@ class CommandTest(FlashcatTest):
 
 
 @unittest.skipUnless(os.path.exists("/usr/bin/sandbox-exec"), "needs the macOS sandbox")
+class HereDocumentTest(FlashcatTest):
+    def test_here_documents_work_inside_the_sandbox(self):
+        self.answers = ["y"]
+        result = self.chat.run_command("cat <<'END' > out.txt\nfrom a here document\nEND")
+        self.assertTrue(result.startswith("Exit code: 0"), result)
+        self.assertEqual(self.read("out.txt"), "from a here document\n")
+
+
 class CommandInTempFolderTest(FlashcatTest):
     """A start folder inside a temporary folder (/tmp, $TMPDIR) must stay usable although other temporary files
     are hidden from commands."""
@@ -921,7 +932,8 @@ class PlanModeTest(FlashcatTest):
 
     def test_every_tool_is_either_a_plan_tool_or_changes_something(self):
         # a new tool must be sorted on purpose: reading (plan mode may use it) or not
-        changing = {"write_file", "edit_file", "write_docx", "write_pdf", "move_file", "move_files", "run_command"}
+        changing = {"write_file", "edit_file", "write_docx", "write_pdf", "write_xlsx", "move_file", "move_files",
+                    "run_command", "start_server", "stop_server"}
         self.assertEqual(set(self.chat.FUNCS), self.chat.PLAN_TOOLS | changing)
         self.assertEqual({t["function"]["name"] for t in self.chat.TOOLS}, set(self.chat.FUNCS))
 
@@ -1025,9 +1037,9 @@ class OwnCommandTest(FlashcatTest):
 
     def test_own_command_becomes_its_prompt(self):
         self.write(os.path.join(self.folder, "explain.md"), "Explain $ARGS for a beginner.\n")
-        self.write(os.path.join(self.folder, "review.md"), "Review the code.\n")
+        self.write(os.path.join(self.folder, "check.md"), "Review the code.\n")
         self.assertEqual(self.chat.expand_custom("/explain notes.txt"), "Explain notes.txt for a beginner.")
-        self.assertEqual(self.chat.expand_custom("/review only the tests"), "Review the code.\n\nonly the tests")
+        self.assertEqual(self.chat.expand_custom("/check only the tests"), "Review the code.\n\nonly the tests")
         self.assertIsNone(self.chat.expand_custom("/unknown"))
         self.assertEqual(self.chat.complete("/expl", 0), "/explain")
 
@@ -1207,6 +1219,335 @@ class ModelSwitchTest(FlashcatTest):
         self.chat.switch_model("b")  # matches two
         self.chat.switch_model("nothing-like-it")
         self.assertEqual(self.chat.MODEL, "test-model")
+
+
+class RewindTest(FlashcatTest):
+    def call(self, name, **args):
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+    def turn(self, question, *steps, answers=()):
+        replies = list(steps) + [{"role": "assistant", "content": "Done."}]
+        self.answers = list(answers)
+        with mock.patch.object(self.chat, "call_model", side_effect=lambda *a, **k: replies.pop(0)):
+            self.chat.run_turn(self.messages, question, show=False)
+
+    def setUp(self):
+        super().setUp()
+        self.messages = [{"role": "system", "content": "sys"}]
+
+    def test_rewind_undoes_every_change_of_the_last_question_only(self):
+        self.turn("first", self.call("write_file", path="keep.txt", content="kept"), answers=["y"])
+        self.turn("second", self.call("edit_file", path="notes.txt", old_text="world", new_text="there"),
+                  self.call("write_file", path="new.txt", content="new"),
+                  self.call("move_file", source="keep.txt", destination="moved.txt"), answers=["y", "y", "y"])
+        self.answers = ["y"]
+        done = self.chat.rewind()
+        self.assertEqual(len(done), 3)
+        self.assertEqual(len(self.asked), 5)  # one question for all three
+        self.assertEqual(self.read("notes.txt"), "hello\nworld\n")
+        self.assertFalse(os.path.exists(os.path.join(self.project, "new.txt")))
+        self.assertEqual(self.read("keep.txt"), "kept\n")  # the first question's file stays
+        self.assertEqual(len(self.chat.journal), 1)
+
+    def test_declined_or_blocked_rewind_changes_nothing_more(self):
+        self.turn("q", self.call("write_file", path="a.txt", content="a"),
+                  self.call("move_file", source="a.txt", destination="b.txt"), answers=["y", "y"])
+        self.answers = ["n"]
+        self.assertEqual(self.chat.rewind(), [])
+        self.assertTrue(os.path.exists(os.path.join(self.project, "b.txt")))
+        self.write(os.path.join(self.project, "a.txt"), "someone else's\n")  # the move cannot be undone now
+        self.answers = ["y"]
+        self.assertEqual(self.chat.rewind(), [])
+        self.assertEqual(self.read("a.txt"), "someone else's\n")
+        self.assertIn("exists again", self.out.getvalue())
+
+
+class AutoTest(FlashcatTest):
+    def test_auto_allows_file_changes_but_not_moves_commands_or_private_data(self):
+        self.chat.state["auto"] = True
+        self.assertIn("Written", self.chat.write_file("a.txt", "a"))
+        self.assertIn("Written", self.chat.edit_file("notes.txt", "world", "there"))
+        self.assertEqual(self.asked, [])
+        self.assertIn("declined", self.chat.move_file("a.txt", "b.txt"))
+        self.assertIn("declined", self.chat.run_command("true"))
+        self.assertIn("declined", self.chat.fetch_url("https://example.com"))
+        self.assertEqual(len(self.asked), 3)
+        result = self.chat.run_tool(ResolveTest.call("write_file", path="../.zshrc", content="x"))
+        self.assertIn("not allowed", result)  # the folder's limits stay
+        self.assertEqual(self.read(os.path.join(self.home, ".zshrc")), "export SECRET=1\n")
+
+    def test_plan_mode_wins_and_auto_is_off_by_default(self):
+        self.assertFalse(self.chat.state["auto"])
+        self.chat.state.update(auto=True, plan=True)
+        self.assertIn("plan mode", self.chat.run_tool(ResolveTest.call("write_file", path="a.txt", content="a")))
+        self.assertFalse(os.path.exists(os.path.join(self.project, "a.txt")))
+
+
+class ExcelTest(FlashcatTest):
+    def test_workbook_reads_back_with_numbers_and_safe_formulas_only(self):
+        self.answers = ["y"]
+        rows = [["Item", "Amount"], ["Desk", 389], ["Lamp", "49.90"], ["Total", "=SUM(B2:B3)"],
+                ["Link", '=HYPERLINK("https://evil.example","x")'], ["Other file", "=[1]Sheet1!A1"],
+                ["Program", "=cmd|' /c calc'!A0"], ["Text", "a < b & c"]]
+        self.assertIn("Written", self.chat.write_xlsx("costs.xlsx", rows, sheet="Costs: 2026"))
+        text = self.chat.read_xlsx(os.path.join(self.project, "costs.xlsx"))
+        self.assertIn("=== Sheet: Costs  2026 ===", text)
+        self.assertIn("Row 2: Desk | 389", text)
+        self.assertIn("Row 3: Lamp | 49.90", text)
+        self.assertIn('Row 5: Link | =HYPERLINK("https://evil.example","x")', text)  # text, not a formula
+        self.assertIn("Row 8: Text | a < b & c", text)
+        with zipfile.ZipFile(os.path.join(self.project, "costs.xlsx")) as z:
+            sheet = z.read("xl/worksheets/sheet1.xml").decode()
+        self.assertEqual(sheet.count("<f>"), 1)
+        self.assertIn("<f>SUM(B2:B3)</f><v>438.9</v>", sheet)  # computed, so previews show the total
+        self.assertIn("Row 4: Total | 438.9", text)
+
+    def test_formula_values_are_computed_and_nothing_else_is_run(self):
+        rows = [["a", "b", "c"], [2, 3, "=A2*B2+1"], [4, 5, "=ROUND(AVERAGE(A2:B3); 1)"],
+                ["=C2/0", "=A5", "=A4"], ["=B4", "=MAX(A2:B3)-MIN(A2:B3)", "=__import__('os')"]]
+        values = self.chat.formula_values(rows)
+        self.assertEqual(values["C2"], 7)
+        self.assertEqual(values["C3"], 3.5)
+        self.assertEqual(values["B5"], 3)
+        for ref in ("A4", "B4", "C4", "A5", "C5"):  # division by zero, circular, not a formula: no value
+            self.assertNotIn(ref, values)
+
+    def test_only_xlsx_and_a_yes(self):
+        with self.assertRaises(ValueError):
+            self.chat.write_xlsx("costs.csv", [["a"]])
+        self.answers = ["n"]
+        self.assertIn("declined", self.chat.write_xlsx("costs.xlsx", [["a"]]))
+        self.assertFalse(os.path.exists(os.path.join(self.project, "costs.xlsx")))
+        self.assertIn("Error", self.chat.write_xlsx("costs.xlsx", "not rows"))
+
+
+class TextCacheTest(FlashcatTest):
+    def test_document_text_is_extracted_once_until_the_file_changes(self):
+        doc = os.path.join(self.project, "letter.rtf")
+        self.write(doc, r"{\rtf1 Dear Flash}")
+        real = self.chat._extract_text
+        calls = []
+        self.chat._extract_text = lambda full, ocr=True: calls.append(full) or real(full, ocr)
+        self.assertIn("Dear Flash", self.chat.extract_text(doc))
+        self.assertIn("Dear Flash", self.chat.extract_text(doc))
+        self.assertEqual(len(calls), 1)
+        self.write(doc, r"{\rtf1 Dear Flash, again}")
+        os.utime(doc, (time.time() + 5, time.time() + 5))
+        self.assertIn("again", self.chat.extract_text(doc))
+        self.assertEqual(len(calls), 2)
+        cache = os.path.join(self.home, ".flashcat", "cache", "text")
+        self.assertEqual(oct(os.stat(cache).st_mode & 0o777), "0o700")
+        for name in os.listdir(cache):
+            self.assertEqual(oct(os.stat(os.path.join(cache, name)).st_mode & 0o777), "0o600")
+        self.assertIsNone(self.chat.extract_text(os.path.join(self.project, "notes.txt")))  # plain text: no cache entry
+        self.assertEqual(len(os.listdir(cache)), 2)
+
+
+class SayTest(FlashcatTest):
+    def test_markdown_is_read_as_plain_sentences(self):
+        text = self.chat.speakable("## Result\n\n**Total:** 926.40 EUR, see [notes](notes.md).\n\n```py\nx = 1\n```\n"
+                                   "| a | b |\n|---|---|\n| 1 | 2 |")
+        self.assertNotIn("x = 1", text)
+        self.assertNotIn("**", text)
+        self.assertNotIn("notes.md", text)
+        self.assertIn("Total: 926.40 EUR, see notes", " ".join(text.split()))
+
+    def test_say_reads_the_last_answer_and_stops_again(self):
+        started = []
+
+        class Fake:
+            def __init__(self, args, **kw):
+                started.append(args)
+                self.stdin, self.alive = io.BytesIO(), True
+            def poll(self):
+                return None if self.alive else 0
+            def terminate(self):
+                self.alive = False
+        messages = [{"role": "system", "content": "s"}, {"role": "assistant", "content": "Hello **there**"}]
+        with mock.patch.object(self.chat.subprocess, "Popen", Fake):
+            self.chat.say_command("", messages)
+            self.assertEqual(started, [["say", "-f", "-"]])
+            self.chat.say_command("", messages)  # a second /say stops
+            self.assertFalse(self.chat.speech)
+
+
+class ServerTest(FlashcatTest):
+    """start_server in the real sandbox with Python's own web server."""
+
+    def free_port(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def tearDown(self):
+        self.chat.stop_server(quiet=True)
+        super().tearDown()
+
+    def test_server_runs_in_the_sandbox_on_its_port_and_stops(self):
+        port = self.free_port()
+        self.answers = ["y"]
+        result = self.chat.start_server(f"python3 -m http.server {port} --bind 127.0.0.1", port)
+        self.assertIn(f"listens on port {port}", result)
+        self.assertEqual(len(self.asked), 1)
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/notes.txt", timeout=5).read()
+        self.assertEqual(page, b"hello\nworld\n")
+        self.assertIn("hello", self.chat.fetch_url(f"http://localhost:{port}/notes.txt"))  # own server: no question
+        self.assertEqual(len(self.asked), 1)
+        self.answers = ["y"]
+        with self.assertRaises(ValueError):  # other local ports stay blocked
+            self.chat.fetch_url(f"http://localhost:{self.free_port()}/")
+        self.assertIn("running already", self.chat.start_server("true", port + 1))
+        self.assertEqual(len(self.asked), 2)
+        self.assertIn("stopped", self.chat.stop_server())
+        self.assertEqual(self.chat.listening(port), [])
+        self.assertFalse(os.listdir(os.path.join(self.home, ".flashcat", "active")))
+
+    def test_server_still_cannot_send_out_or_listen_elsewhere(self):
+        port, other = self.free_port(), self.free_port()
+        script = (f"import socket, urllib.request\n"
+                  f"s = socket.socket()\n"
+                  f"try:\n s.bind(('127.0.0.1', {other})); print('OTHER PORT OK')\n"
+                  f"except OSError as e: print('other port blocked')\n"
+                  f"try:\n urllib.request.urlopen('http://127.0.0.1:{port}/', timeout=3); print('OUT OK')\n"
+                  f"except Exception as e: print('out blocked')\n"
+                  f"import http.server\n"
+                  f"http.server.HTTPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+        self.write(os.path.join(self.project, "srv.py"), script)
+        self.answers = ["y"]
+        result = self.chat.start_server("python3 -u srv.py", port)
+        self.assertIn("other port blocked", result)
+        self.assertIn("out blocked", result)
+        self.assertNotIn("OK", result.replace("OK", "", 0) if False else result.split("Output so far:")[1])
+
+    def test_open_to_the_network_asks_in_red_and_no_stops_it(self):
+        port = self.free_port()
+        self.answers = ["y", "n"]
+        result = self.chat.start_server(f"python3 -m http.server {port}", port)  # all addresses
+        self.assertIn("stopped the server", result)
+        self.assertIn("open to your network", self.out.getvalue())
+        self.assertEqual(self.chat.listening(port), [])
+        self.assertFalse(self.chat.server)
+
+    def test_bad_ports_and_a_server_that_ends_at_once(self):
+        self.assertIn("Refused", self.chat.start_server("x", 80))
+        self.assertIn("Error", self.chat.start_server("x", "abc"))
+        self.answers = ["y"]
+        self.assertIn("ended at once with exit code 3", self.chat.start_server("echo bye; exit 3", self.free_port()))
+        self.assertFalse(self.chat.server)
+
+
+class GitCommandTest(FlashcatTest):
+    def git(self, *args):
+        return subprocess.run(["git", "-C", self.project, *args], capture_output=True, text=True, check=True).stdout
+
+    def setUp(self):
+        super().setUp()
+        self.git("init", "-q")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.com", "add", "notes.txt")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "first")
+        self.git("config", "user.name", "T")
+        self.git("config", "user.email", "t@example.com")
+        self.chat.state["session"] = "test"
+
+    def test_review_sends_the_diff_and_changes_nothing(self):
+        self.write(os.path.join(self.project, "notes.txt"), "hello\nthere\n")
+        seen = {}
+        def turn(messages, question, show=True, attachment=""):
+            seen.update(question=question, attachment=attachment)
+            messages.append({"role": "assistant", "content": "Looks fine."})
+        with mock.patch.object(self.chat, "run_turn", side_effect=turn):
+            self.chat.review([{"role": "system", "content": "s"}])
+        self.assertIn("-world", seen["attachment"])
+        self.assertIn("+there", seen["attachment"])
+        self.assertIn("Do not change anything", seen["question"])
+
+    def test_commit_stages_after_a_yes_and_uses_the_confirmed_message(self):
+        self.write(os.path.join(self.project, "notes.txt"), "hello\nthere\n")
+        self.write(os.path.join(self.project, "new.txt"), "new\n")
+        def turn(messages, question, show=True, attachment=""):
+            self.assertIn("new.txt", attachment)
+            self.chat.state["last_answer"] = "```\nChange the greeting\n\nAnd add new.txt.\n```"
+        self.answers = ["y", "y"]
+        with mock.patch.object(self.chat, "run_turn", side_effect=turn):
+            self.chat.commit([{"role": "system", "content": "s"}])
+        self.assertEqual(self.git("log", "-1", "--format=%B").strip(), "Change the greeting\n\nAnd add new.txt.")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_no_commit_without_a_yes(self):
+        self.write(os.path.join(self.project, "notes.txt"), "changed\n")
+        self.git("add", "notes.txt")
+        def turn(messages, question, show=True, attachment=""):
+            self.chat.state["last_answer"] = "Change notes"
+        self.answers = ["n"]
+        with mock.patch.object(self.chat, "run_turn", side_effect=turn):
+            self.chat.commit([{"role": "system", "content": "s"}])
+        self.assertEqual(self.git("log", "--format=%s"), "first\n")
+
+
+class LlamaSwitchTest(FlashcatTest):
+    """/model with llama.cpp: a stand-in llama-server that notes its model and answers /health."""
+
+    def setUp(self):
+        super().setUp()
+        models = os.path.join(self.home, ".flashcat", "models")
+        os.makedirs(models)
+        for name in ("test-model.gguf", "other-7b.gguf", "mmproj-other.gguf", "broken-1b.gguf"):
+            self.write(os.path.join(models, name), "")
+        self.bin = os.path.join(self.base, "bin")
+        os.makedirs(self.bin)
+        self.log = os.path.join(self.base, "server.log")
+        with open(os.path.join(self.bin, "llama-server"), "w") as f:
+            f.write(f"""#!/usr/bin/python3
+import http.server, sys
+args = sys.argv[1:]
+open({self.log!r}, "a").write(" ".join(args) + "\\n")
+if "broken-1b" in args[1]:
+    sys.exit(1)
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(args[args.index("--port") + 1])), H).serve_forever()
+""")
+        os.chmod(os.path.join(self.bin, "llama-server"), 0o755)
+        self.path = mock.patch.dict(os.environ, {"PATH": self.bin + os.pathsep + os.environ["PATH"]})
+        self.path.start()
+        self.chat.BACKEND = "llamacpp"
+        self.chat.MODEL = "test-model"
+        self.chat.loaded_context_length = lambda: 8192
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+        self.chat.HOME_DIR = os.path.join(self.home, ".flashcat")
+        pid = self.chat.start_llama_server("test-model", self.chat.gguf_models()["test-model"], self.port, 4096)
+        self.chat.write_llamacpp_note(pid, self.port, "test-model")
+
+    def tearDown(self):
+        note = self.chat.llamacpp_note()
+        if note:
+            self.chat.stop_pid(note[0])
+        self.path.stop()
+        super().tearDown()
+
+    def test_switch_restarts_the_server_with_the_other_model_on_the_same_port(self):
+        self.chat.switch_model("other")
+        self.assertEqual(self.chat.MODEL, "other-7b")
+        pid, port, model = self.chat.llamacpp_note()
+        self.assertEqual((port, model), (self.port, "other-7b"))
+        last = open(self.log).read().splitlines()[-1]
+        self.assertIn("other-7b.gguf --mmproj", last)
+        self.assertIn(f"--host 127.0.0.1 --port {self.port} --offline", last)
+
+    def test_failed_load_goes_back_and_another_window_blocks_it(self):
+        self.chat.switch_model("broken")
+        self.assertEqual(self.chat.MODEL, "test-model")
+        self.assertEqual(self.chat.llamacpp_note()[2], "test-model")
+        self.write(os.path.join(self.home, ".flashcat", "active", f"session.{os.getpid()}"), "")
+        self.chat.switch_model("other")
+        self.assertEqual(self.chat.MODEL, "test-model")
+        self.assertIn("Another Flashcat window", self.out.getvalue())
 
 
 class CommandLineTest(unittest.TestCase):

@@ -129,6 +129,8 @@ Then just talk to it:
 |---|---|
 | `/help` | all commands |
 | `/undo` | undo the last file change (`/undo list` shows all changes of the chat) |
+| `/rewind` | undo **all** changes of your last question in one step |
+| `/auto` | file changes in this chat without asking each time (you still see every change; moves, commands, internet and private data still ask). `/auto` again switches it off |
 | `/copy`, `/save` | copy or save the last answer |
 | `/export` | save the whole chat as a Markdown file |
 | `Ctrl+V` or `/paste` | attach the screenshot or image in the clipboard – it shows up as `📎[Image #1]` in your message. Works in every terminal |
@@ -138,8 +140,12 @@ Then just talk to it:
 | `/compact` | summarize the chat to free context (happens by itself when the context is 80 % full) |
 | `/think` | think more thoroughly (slower) |
 | `/plan` | plan first: Flashcat only reads and presents a plan, nothing is changed or run. `/plan` again switches it off, then say "go ahead" |
-| `/model` | list the installed models, `/model <name>` switches without leaving the chat (LM Studio) |
+| `/model` | list the installed models, `/model <name>` switches without leaving the chat (LM Studio and llama.cpp) |
 | `/test` | `/test <command>` sets a test command for this folder: it runs by itself after Flashcat changed files, and failures go back to the model (`/test off` removes it) |
+| `/review` | the model looks through your uncommitted git changes: bugs, risks, what is missing |
+| `/commit` | the model suggests a commit message for your changes – you see it and confirm before anything is committed |
+| `/stop` | stop the server Flashcat started (e.g. `npm run dev`) |
+| `/say` | read the last answer aloud (macOS' own voice, offline); `/say on` reads every answer |
 | `/command` | your own commands: `/command explain Explain $ARGS for a beginner` creates `/explain` (saved in `~/.flashcat/commands/`) |
 | `Esc` | cancel the current answer |
 | `@file` | attach a file to your message (Tab completes) |
@@ -185,9 +191,11 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
 
 ## What it can do
 
-- **Files:** list, read, search, create and change text files; create Word (`.docx`) and PDF documents;
-  rename and move files
-- **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition
+- **Files:** list, read, search, create and change text files; create Word (`.docx`), PDF and Excel
+  (`.xlsx`, with sums) documents; rename and move files
+- **Documents:** reads PDF, Word, Excel — scanned PDFs and images via macOS text recognition. The text it
+  read is remembered (in `~/.flashcat/cache`, until the file changes), so searching a folder of documents
+  again is fast
 - **Finding things:** searches all files for several words at once – synonyms and other word forms of
   what you asked for – and shows the files that contain most of them first, so "when can I cancel?"
   also finds the contract that only says "notice period"
@@ -199,11 +207,13 @@ Your chats are stored only on your Mac, in `~/.flashcat/sessions` (`/resume` lis
   builds** to check its work (in a sandbox, after you confirm the command). It gets an overview of a
   project first (files with their classes and functions), can **plan before it changes anything**
   (`/plan`), and with a test command set (`/test`) it **runs your tests after every change** and fixes
-  what fails. It can't match the big
+  what fails. It starts development servers (`npm run dev`, …) and can open their pages, reviews your
+  changes (`/review`) and writes commit messages (`/commit`). It can't match the big
   frontier models in the cloud, but it does a solid job on simple tasks, and it is free and runs entirely
   on your Mac
 - **Web:** web search (DuckDuckGo) and reading web pages
 - **Long chats:** when the context fills up, the chat is summarized by itself, so you can keep going
+- **Undo a whole question:** `/rewind` takes back everything the last question changed, in one step
 - **Terminal:** answers stream live with Markdown, tables and syntax-highlighted code; clickable file names;
   screenshots via `Ctrl+V`; one-off questions with `flashcat "…"` and piped input; the window title shows
   `🐈 Flashcat · <folder>`, so you can tell several windows apart
@@ -238,6 +248,13 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   blocked except a short list that tools need), no stopping other programs, no writing
   into terminal windows. Commands are stopped after 2 minutes (at most 10), cannot ask for input, and nothing they
   started keeps running afterwards.
+- **Servers** (`npm run dev`, …) are the one exception that keeps running – only after your `Y`, one at a
+  time, in the same sandbox. They may listen on their one port, nothing else: still no internet, no other
+  ports. If a server is reachable from other devices in your network (not only from this Mac), Flashcat
+  says so in red and stops it unless you keep it. It stops with `/stop`, when the chat ends, and when you
+  close the window. The model may open the server's pages without asking – nothing leaves your Mac.
+- `/review` and `/commit` run git in the same sandbox. `/commit` shows the message and commits only after
+  your `Y`; if nothing is staged, it asks before `git add -A`.
 - If a command adds git hooks or git settings that would run programs the next time you use git
   (outside the sandbox), Flashcat shows them in red and undoes them unless you keep them.
 - A test command you set with `/test` is the one command that runs without a question – you typed it
@@ -257,6 +274,12 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   types). Without your `Y` nothing is written.
 - If you cancel with Esc after files were changed, the changes stay (`/undo` reverts them) and the
   model is told that it was stopped, so it does not work from an outdated picture.
+- `/auto` lets file changes through without the question – only for the current chat, only for
+  creating and changing files (each one is still shown and backed up). Moving files, commands, servers,
+  internet access and private data still ask. Plan mode still wins.
+- An Excel workbook gets formulas only for simple sums and arithmetic on its own cells (`=SUM(B2:B9)`).
+  Anything else that looks like a formula (links, other files, functions that fetch data or start
+  programs) is written as plain text.
 
 **Every internet access asks first**
 - Web searches and web pages are only fetched after your `Y` – nothing leaves your Mac before that,
@@ -272,8 +295,9 @@ locked.** Details: [SECURITY.md](SECURITY.md).
   allow it – and again whenever it changes.
 
 **Your data stays on your Mac**
-- The model runs locally in LM Studio, Ollama or llama.cpp. Chats are stored only in `~/.flashcat`, readable only by
-  your user account. The model is unloaded again when the last Flashcat window closes, so the memory is freed.
+- The model runs locally in LM Studio, Ollama or llama.cpp. Chats and the remembered text of documents
+  are stored only in `~/.flashcat`, readable only by your user account (the remembered text is deleted
+  after 30 days without use). The model is unloaded again when the last Flashcat window closes, so the memory is freed.
 
 **Installing and updating**
 - The installer only does what it describes. If the download breaks off, nothing runs at all.
