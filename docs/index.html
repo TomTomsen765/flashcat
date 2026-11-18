@@ -14,12 +14,13 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐈</text></svg>">
 <style>
   :root {
-    --bg: #141416;
+    --bg: #101012;
     --term: #1c1d21;
-    --deep: #0e0e10;
-    --line: #2a292b;
+    --card: #17171a;
+    --deep: #0b0b0d;
+    --line: #29282b;
     --line-2: #3a393b;
-    --text: #ececec;
+    --text: #f0eeec;
     --soft: #d8d4d0;
     --muted: #a8a29d;
     --dim: #6f6b68;
@@ -29,29 +30,28 @@
     --green: #98c379;
     --yellow: #e5c07b;
     --mono: "SF Mono", ui-monospace, Menlo, Monaco, "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
 
     /* hero, by day: orange */
-    --h-bg: var(--accent);
+    --h-bg: radial-gradient(120% 100% at 72% 38%, #eb9473 0%, #d97757 42%, #b9583a 100%);
     --h-fg: #141416;
-    --h-muted: #3a2219;
-    --h-cat: #141416;
-    --h-eyes: #fff4ec;
+    --h-muted: #47271b;
     --h-p-bg: #141416;
-    --h-p-fg: var(--accent);
-    --h-g-line: #141416;
+    --h-p-fg: #f3a184;
+    --h-g-line: rgba(20, 20, 22, .75);
     --h-g-fg: #141416;
+    --h-chip: rgba(20, 20, 22, .12);
   }
   body.night {
     /* hero, by night: dark, Flash sleeps */
-    --h-bg: var(--deep);
+    --h-bg: radial-gradient(120% 100% at 72% 38%, #23253a 0%, #131420 45%, #0b0b0d 100%);
     --h-fg: var(--text);
     --h-muted: var(--muted);
-    --h-cat: var(--dim);
-    --h-eyes: var(--accent);
     --h-p-bg: var(--accent);
     --h-p-fg: #1a1210;
     --h-g-line: var(--line-2);
     --h-g-fg: var(--text);
+    --h-chip: rgba(255, 255, 255, .07);
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -59,28 +59,19 @@
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 16px/1.65 var(--mono);
+    font: 17px/1.65 var(--sans);
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
   a { color: var(--accent); }
   a:hover { color: #e4896b; }
-  code { font-family: var(--mono); color: var(--text); }
+  code { font-family: var(--mono); font-size: .9em; color: var(--text); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-  .wrap { max-width: 1320px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
 
-  /* ---------- cats ---------- */
+  /* ---------- cats (drawn) ---------- */
   .cat { font: 1em/1.1 var(--mono); white-space: pre; color: var(--dim); margin: 0; user-select: none; }
   .cat b { color: var(--accent); font-weight: 800; }
-
-  #sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
-  #sky .cat { position: absolute; opacity: var(--o); font-size: var(--s);
-    animation: drift var(--d) ease-in-out var(--delay) infinite alternate; }
-  @keyframes drift {
-    from { transform: translate(0, 0) rotate(var(--r1)); }
-    to   { transform: translate(var(--dx), var(--dy)) rotate(var(--r2)); }
-  }
-
   .pop { position: fixed; z-index: 50; pointer-events: none; font-size: 15px; }
   .pop .cat { color: var(--muted); animation: pop 1.6s cubic-bezier(.2, .7, .3, 1) forwards; }
   @keyframes pop {
@@ -91,76 +82,79 @@
   }
   .pop small { position: absolute; left: 50%; top: -1.6em; transform: translateX(-50%); color: var(--accent);
     font: 700 13px var(--mono); animation: fade 1s ease-out forwards; white-space: nowrap; }
+  .hero ~ .pop small, .pop.on-hero small { color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, .5); }
   @keyframes fade { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -18px); } }
 
   /* ---------- hero ---------- */
-  .hero { position: relative; background: var(--h-bg); color: var(--h-fg); }
-  .toc { display: flex; flex-wrap: wrap; gap: 0 24px; padding-top: 14px; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
-  .toc a { color: var(--h-fg); text-decoration: none; padding: 10px 0; }
-  .toc a:hover { text-decoration: underline; text-underline-offset: 4px; }
-  .cover { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 48px;
-    padding: clamp(40px, 6vw, 88px) 0 clamp(56px, 7vw, 104px); }
-  .cover-text { flex: 1 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
-  .label { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: .12em; }
-  h1 { margin: 0; font-weight: 800; font-size: clamp(44px, 6.2vw, 88px); line-height: .98; letter-spacing: -.04em; }
+  .hero { position: relative; background: var(--h-bg); color: var(--h-fg); overflow: hidden; }
+  .nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0 28px; padding-top: 18px; font: 700 14px var(--mono); }
+  .nav .brand { margin-right: auto; font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+  .nav a { color: var(--h-fg); text-decoration: none; padding: 10px 0; }
+  .nav a:hover { text-decoration: underline; text-underline-offset: 5px; }
   .star { display: inline-block; animation: spin 14s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .tagline { margin: 0; font-size: clamp(20px, 2.2vw, 28px); line-height: 1.35; font-weight: 500; max-width: 26ch; }
-  .meta { margin: 0; font-size: 14px; white-space: pre-wrap; color: var(--h-muted); }
+  .cover { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: center; gap: 24px;
+    min-height: min(820px, calc(100vh - 60px)); padding: 32px 0 56px; }
+  .cover-text { display: flex; flex-direction: column; gap: 26px; position: relative; z-index: 2; }
+  .pill { align-self: flex-start; margin: 0; padding: 7px 14px; border-radius: 999px; background: var(--h-chip);
+    font: 700 13px var(--mono); letter-spacing: .04em; }
+  h1 { margin: 0; font: 800 clamp(52px, 7.4vw, 104px)/.95 var(--mono); letter-spacing: -.06em; }
+  .tagline { margin: 0; font-size: clamp(21px, 2.3vw, 30px); line-height: 1.3; font-weight: 500; max-width: 22ch; letter-spacing: -.01em; }
+  .meta { margin: 0; font: 13.5px/1.7 var(--mono); color: var(--h-muted); max-width: 46ch; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; }
-  .btn { display: inline-flex; align-items: center; min-height: 52px; padding: 0 24px; border-radius: 10px;
-    font: 800 16px var(--mono); text-decoration: none; }
-  .btn.primary { background: var(--h-p-bg); color: var(--h-p-fg); }
+  .btn { display: inline-flex; align-items: center; min-height: 54px; padding: 0 26px; border-radius: 14px;
+    font: 800 16px var(--mono); text-decoration: none; transition: transform .15s, filter .15s; }
+  .btn.primary { background: var(--h-p-bg); color: var(--h-p-fg); box-shadow: 0 10px 30px rgba(0, 0, 0, .28); }
   .btn.ghost { border: 2px solid var(--h-g-line); color: var(--h-g-fg); }
-  .btn:hover { filter: brightness(1.12); color: inherit; }
+  .btn:hover { transform: translateY(-2px); filter: brightness(1.1); color: var(--h-g-fg); }
   .btn.primary:hover { color: var(--h-p-fg); }
   .hero :focus-visible { outline-color: var(--h-fg); }
 
-  .flash-box { flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 18px; }
-  #flash { position: relative; font-size: clamp(64px, 11vw, 168px); color: var(--h-cat); background: none; border: 0;
-    padding: 0; cursor: pointer; text-align: left; }
-  #flash .cat { color: inherit; }
-  #flash .cat b { color: var(--h-eyes); }
-  #flash .zz { position: absolute; left: 96%; top: -.1em; font: 700 .22em var(--mono); color: var(--h-muted);
-    opacity: 0; animation: zz 3s ease-out infinite; display: none; }
-  body.night #flash .zz { display: block; }
-  #flash .zz:nth-of-type(2) { animation-delay: 1s; }
-  #flash .zz:nth-of-type(3) { animation-delay: 2s; }
-  @keyframes zz { 0% { opacity: 0; transform: translate(0, 10px) scale(.7); } 20% { opacity: .9; }
-    100% { opacity: 0; transform: translate(.5em, -1.2em) scale(1.2); } }
-  .caption { margin: 0; font-size: 14px; font-weight: 700; color: var(--h-muted); }
+  .stage-box { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+  /* the 3D scene is wider than its column: it may reach behind the text and to the window's edge */
+  #stage { position: relative; width: 132%; margin: 0 -22% 0 -10%; aspect-ratio: 5 / 4; max-height: 680px; touch-action: pan-y; }
+  #stage canvas, #sandbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .stand-in { position: absolute; inset: 0; display: grid; place-items: center; font-size: clamp(56px, 9vw, 130px); }
+  .stand-in .cat { color: var(--h-fg); } .stand-in .cat b { color: #fff4ec; }
+  .three .stand-in { display: none; }
+  .caption { margin: 0; font: 700 14px var(--mono); color: var(--h-muted); }
+  #pet { background: none; border: 0; padding: 6px 4px; font: inherit; color: inherit; cursor: pointer;
+    text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 4px; }
 
-  /* ---------- man sections ---------- */
+  /* ---------- sections ---------- */
   main { position: relative; }
-  .sec { display: flex; flex-wrap: wrap; gap: 16px 48px; padding: clamp(56px, 7vw, 96px) 0; border-bottom: 1px dashed var(--line-2); }
+  .sec { padding: clamp(64px, 8vw, 120px) 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 36px; }
   .sec:last-child { border-bottom: 0; }
-  .sec > h2 { flex: 0 0 220px; margin: 0; font-size: 14px; letter-spacing: .12em; color: var(--accent); }
-  .sec-body { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 30px; }
-  .big { margin: 0; font-size: clamp(22px, 2.6vw, 34px); line-height: 1.35; font-weight: 500; letter-spacing: -.01em; }
-  .note { margin: 0; font-size: 14px; color: var(--muted); }
+  .eyebrow { margin: 0 0 14px; font: 700 13px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .sec h2 { margin: 0; font: 800 clamp(30px, 4.2vw, 56px)/1.05 var(--mono); letter-spacing: -.045em; max-width: 20ch; }
+  .sec h2 span { color: var(--accent); }
+  .lead { margin: 0; font-size: clamp(19px, 2vw, 24px); line-height: 1.45; color: var(--soft); max-width: 58ch; }
+  .note { margin: 0; font-size: 15px; color: var(--muted); max-width: 92ch; }
 
-  /* synopsis */
-  .synopsis { font-size: clamp(18px, 2vw, 24px); line-height: 1.5; overflow-x: auto; }
+  /* demo */
+  .synopsis { font: clamp(15px, 1.6vw, 20px)/1.6 var(--mono); overflow-x: auto; background: var(--card);
+    border: 1px solid var(--line); border-radius: 16px; padding: 20px 24px; }
   .synopsis div { white-space: pre; }
+  .synopsis div::before { content: "$ "; color: var(--dim); }
   .synopsis .opt { color: var(--accent); }
   .synopsis .pipe { color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: 10px; }
-  .chip { min-height: 44px; padding: 0 16px; border-radius: 999px; font: 500 14px var(--mono); cursor: pointer;
-    border: 1px solid var(--line-2); background: transparent; color: var(--muted); }
-  .chip:hover { border-color: var(--accent); }
+  .chip { min-height: 44px; padding: 0 18px; border-radius: 999px; font: 500 14px var(--mono); cursor: pointer;
+    border: 1px solid var(--line-2); background: transparent; color: var(--muted); transition: border-color .15s, color .15s; }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
   .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
-  .demo { position: relative; margin-top: 52px; }
+  .demo { position: relative; margin-top: 40px; }
   .peek-clip { position: absolute; top: -60px; right: 0; width: 160px; height: 60px; overflow: hidden; }
   .peek { position: absolute; bottom: -56px; right: 40px; font-size: 16px; animation: peek 7s ease-in-out infinite; }
   @keyframes peek { 0%, 55%, 100% { transform: translateY(0); } 65%, 88% { transform: translateY(-54px); } }
-  .term { margin: 0; background: var(--term); border-radius: 12px; overflow: hidden;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .06); }
-  .term-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+  .term { margin: 0; background: var(--term); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 40px 100px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .07), 0 0 120px rgba(217, 119, 87, .08); }
+  .term-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; background: rgba(255, 255, 255, .03); }
   .term-bar i { width: 12px; height: 12px; border-radius: 50%; }
-  .term-bar span { flex: 1; min-width: 0; text-align: center; font-size: 12px; color: var(--muted); margin-right: 52px;
+  .term-bar span { flex: 1; min-width: 0; text-align: center; font: 12px var(--mono); color: var(--muted); margin-right: 52px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .term-body { padding: 8px 24px 26px; font-size: 13.5px; line-height: 1.55; color: var(--soft); min-height: 440px; overflow-x: auto; }
+  .term-body { padding: 12px 24px 26px; font: 13.5px/1.55 var(--mono); color: var(--soft); min-height: 440px; overflow-x: auto; }
   .term-body > div { white-space: pre; min-height: 1.55em; }
   /* questions and answers wrap like in a real terminal; tables and cards shrink to fit instead (see fit()) */
   .term-body > .t-prompt, .term-body > .t-plan, .term-body > .t-answer, .term-body > .t-ok, .term-body > .t-ask { white-space: pre-wrap; }
@@ -177,27 +171,30 @@
     animation: blink 1.1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 
-  /* description */
-  .rows { display: flex; flex-direction: column; }
-  .row { position: relative; display: flex; flex-wrap: wrap; gap: 8px 32px; padding: 26px 0;
-    border-top: 1px solid var(--line); transition: border-color .2s; }
-  .row:last-child { border-bottom: 1px solid var(--line); }
-  .row:hover { border-top-color: var(--accent); }
-  .row .ico { flex: 0 0 96px; font-size: 26px; font-weight: 800; color: var(--accent); }
-  .row > div:last-child { flex: 1 1 420px; min-width: 0; }
-  .row h3 { margin: 0 0 4px; font-size: 18px; }
-  .row p { margin: 0; color: var(--muted); }
+  /* features */
+  .rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
+  .row { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 28px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 20px; transition: border-color .2s, transform .2s, background .2s; }
+  .row:hover { border-color: var(--accent); transform: translateY(-4px); background: #1b1a1d; }
+  .row .ico { align-self: flex-start; min-width: 64px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft);
+    font: 800 20px var(--mono); color: var(--accent); text-align: center; }
+  .row h3 { margin: 0 0 6px; font: 800 20px var(--mono); letter-spacing: -.02em; }
+  .row p { margin: 0; color: var(--muted); font-size: 16px; }
   .row .hide { position: absolute; top: 0; right: 24px; height: 50px; width: 90px; overflow: hidden;
     transform: translateY(-100%); pointer-events: none; }
   .row .hide .cat { font-size: 13px; transform: translateY(52px); transition: transform .35s cubic-bezier(.3, 1.6, .5, 1); }
   .row:hover .hide .cat { transform: translateY(10px); }
 
   /* safety */
-  .claim { margin: 0; font-size: clamp(30px, 4.4vw, 60px); line-height: 1.04; font-weight: 800; letter-spacing: -.035em; }
-  .claim span { color: var(--accent); }
-  .split { display: flex; flex-wrap: wrap; gap: 32px 48px; align-items: flex-start; }
-  .tree { flex: 1 1 340px; min-width: 0; margin: 0; background: var(--term); border: 1px solid var(--line);
-    border-radius: 12px; padding: 22px 24px; font-size: 14.5px; line-height: 1.8; overflow-x: auto; }
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 24px; align-items: stretch; }
+  .box3d { position: relative; margin: 0; background: radial-gradient(80% 80% at 50% 45%, #201a19 0%, var(--card) 70%);
+    border: 1px solid var(--line); border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; }
+  #sandbox { position: relative; flex: 1; min-height: 340px; }
+  .box3d figcaption { padding: 14px 22px 18px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); }
+  .box3d figcaption b { color: var(--accent); }
+  html:not(.three) .box3d { display: none; }
+  .tree { margin: 0; background: var(--card); border: 1px solid var(--line);
+    border-radius: 20px; padding: 24px 26px; font: 14.5px/1.9 var(--mono); overflow-x: auto; }
   .tree figcaption { margin-bottom: 10px; font-size: 12px; letter-spacing: .1em; color: var(--muted); }
   .tree div { white-space: pre; }
   .tree .start { color: var(--accent); font-weight: 700; }
@@ -205,97 +202,107 @@
   .tree .locked { color: var(--dim); text-decoration: line-through; }
   .tree .why { color: var(--muted); }
   .tree .home { color: var(--dim); }
-  .rules { flex: 1 1 340px; min-width: 0; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 26px; }
-  .rules li { display: flex; flex-direction: column; gap: 6px; }
-  .rules strong { color: var(--accent); }
-  .rules span { color: var(--muted); }
+  .rules { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 18px; }
+  .rules li { display: flex; flex-direction: column; gap: 10px; padding: 26px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); }
+  .rules strong { font: 800 16px var(--mono); color: var(--accent); }
+  .rules span { color: var(--muted); font-size: 16px; }
 
   /* requirements */
+  .panel { display: flex; flex-direction: column; gap: 26px; padding: clamp(22px, 3vw, 36px); background: var(--card);
+    border: 1px solid var(--line); border-radius: 24px; }
   .mems { display: flex; flex-wrap: wrap; gap: 10px; }
-  .mem { min-height: 48px; padding: 0 20px; border-radius: 10px; font: 800 16px var(--mono); cursor: pointer;
+  .mem { min-height: 50px; padding: 0 22px; border-radius: 14px; font: 800 16px var(--mono); cursor: pointer;
     border: 1px solid var(--line-2); background: transparent; color: var(--text); }
   .mem:hover { border-color: var(--accent); }
   .mem[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: #1a1210; }
-  .bar { height: 56px; border: 1px solid var(--line-2); border-radius: 10px; overflow: hidden; display: flex; background: var(--term); }
-  .bar-fill { width: 65%; background: var(--accent); color: #1a1210; font-weight: 800; font-size: 14px; display: flex;
-    align-items: center; padding: 0 14px; white-space: nowrap; overflow: hidden; transition: width .4s cubic-bezier(.3, 1.4, .5, 1); }
-  .bar-legend { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .bar { height: 60px; border: 1px solid var(--line-2); border-radius: 14px; overflow: hidden; display: flex; background: var(--deep); }
+  .bar-fill { width: 65%; background: linear-gradient(90deg, #c4623f, var(--accent)); color: #1a1210; font: 800 14px var(--mono); display: flex;
+    align-items: center; padding: 0 16px; white-space: nowrap; overflow: hidden; transition: width .4s cubic-bezier(.3, 1.4, .5, 1); }
+  .bar-legend { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; font: 13px var(--mono); color: var(--muted); }
   .verdict { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 24px; }
-  .verdict b { font-size: clamp(40px, 5vw, 64px); font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+  .verdict b { font: 800 clamp(40px, 5vw, 64px)/1 var(--mono); letter-spacing: -.05em; }
   .verdict b.difficult { color: var(--muted); } .verdict b.okay { color: var(--yellow); } .verdict b.smooth { color: var(--green); }
   .verdict span { flex: 1 1 360px; color: var(--soft); }
 
   /* install */
-  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 28px; }
-  .steps > li { display: flex; flex-wrap: wrap; gap: 8px 24px; }
-  .steps .n { flex: 0 0 40px; font-size: 26px; font-weight: 800; color: var(--accent); }
-  .steps .s { flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+  .steps > li { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: clamp(20px, 2.6vw, 30px); background: var(--card);
+    border: 1px solid var(--line); border-radius: 20px; }
+  .steps .n { flex: 0 0 48px; height: 48px; border-radius: 14px; background: var(--accent); color: #1a1210;
+    font: 800 22px/48px var(--mono); text-align: center; }
+  .steps .s { flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 14px; padding-top: 8px; }
   .steps p { margin: 0; color: var(--soft); }
-  .shell { background: var(--deep); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .shell { background: var(--deep); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
   .shell-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px;
     border-bottom: 1px solid var(--line); }
   .tabs { display: flex; gap: 4px; }
-  .tab, .copy { min-height: 44px; padding: 0 16px; border-radius: 8px; font: 700 14px var(--mono); cursor: pointer; }
+  .tab, .copy { min-height: 44px; padding: 0 16px; border-radius: 10px; font: 700 14px var(--mono); cursor: pointer; }
   .tab { border: 0; background: transparent; color: var(--muted); }
   .tab[aria-selected="true"] { background: var(--line); color: var(--text); }
   .copy { border: 1px solid var(--line-2); background: #1e1d1f; color: var(--text); }
   .copy:hover { border-color: var(--accent); }
-  .shell pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 14px; }
+  .shell pre { margin: 0; padding: 18px 20px; overflow-x: auto; font: 14px var(--mono); }
+  .shell pre code { font-size: 14px; }
   .shell pre::before { content: "$ "; color: var(--accent); }
-  .inline-cmd { background: var(--deep); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+  .inline-cmd { background: var(--deep); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }
 
   /* named after */
   .named { display: flex; flex-wrap: wrap; align-items: center; gap: 24px 48px; }
   #sleeper { font-size: clamp(32px, 4vw, 48px); }
-  .named p span { color: var(--muted); }
+  .named p { margin: 0; font: 800 clamp(26px, 3.4vw, 44px)/1.15 var(--mono); letter-spacing: -.04em; }
+  .named p span { color: var(--muted); font-weight: 500; }
 
   footer { border-top: 1px solid var(--line); }
   footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding-top: 22px;
-    padding-bottom: 40px; font-size: 13px; font-weight: 700; color: var(--muted); }
-  footer .wrap span:nth-child(2) { font-weight: 400; }
+    padding-bottom: 40px; font: 13px var(--mono); color: var(--muted); }
 
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+  @media (max-width: 900px) {
+    .cover { grid-template-columns: minmax(0, 1fr); min-height: 0; gap: 8px; padding-bottom: 40px; }
+    #stage { width: 100%; margin: 0; aspect-ratio: 4 / 3; }
+    .nav { gap: 0 18px; font-size: 13px; }
+    .nav .brand { flex-basis: 100%; }
+  }
   @media (max-width: 600px) {
     .peek-clip { display: none; }
-    .sec > h2 { flex-basis: 100%; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-    body.night #flash .zz { opacity: .9; }
   }
 </style>
 </head>
 <body>
 
-<div id="sky" aria-hidden="true"></div>
-
 <header class="hero" id="top">
   <div class="wrap">
-    <nav class="toc" aria-label="Sections">
-      <a href="#synopsis">SYNOPSIS</a>
-      <a href="#description">DESCRIPTION</a>
-      <a href="#safety">SAFETY</a>
-      <a href="#requirements">REQUIREMENTS</a>
-      <a href="#install">INSTALL</a>
-      <a href="https://github.com/TomTomsen765/flashcat">GITHUB ↗</a>
+    <nav class="nav" aria-label="Sections">
+      <a class="brand" href="#top"><span class="star" aria-hidden="true">✻</span> flashcat</a>
+      <a href="#demo">demo</a>
+      <a href="#features">features</a>
+      <a href="#safety">safety</a>
+      <a href="#requirements">which Mac?</a>
+      <a href="#install">install</a>
+      <a href="https://github.com/TomTomsen765/flashcat">GitHub ↗</a>
     </nav>
     <div class="cover">
       <div class="cover-text">
-        <p class="label">NAME</p>
-        <h1><span class="star" aria-hidden="true">✻</span> flashcat</h1>
-        <p class="tagline">— a local AI assistant for your Mac terminal. Private. Offline. Yours.</p>
-        <p class="meta">PDF · Word · Excel  /  LM Studio · Ollama · llama.cpp  /  Gemma 4  /  Apple Silicon  /  free &amp; open source</p>
+        <p class="pill">free &amp; open source · runs on your Mac</p>
+        <h1>flashcat</h1>
+        <p class="tagline">A local AI assistant for your Mac terminal. Private. Offline. Yours.</p>
+        <p class="meta">PDF · Word · Excel  /  LM Studio · Ollama · llama.cpp  /  Gemma 4  /  Apple Silicon</p>
         <div class="cta">
           <a class="btn primary" href="#install">$ install flashcat</a>
-          <a class="btn ghost" href="#synopsis">▶ watch it work</a>
+          <a class="btn ghost" href="#demo">▶ watch it work</a>
         </div>
       </div>
-      <div class="flash-box">
-        <button type="button" id="flash" title="Pet Flash" aria-label="Flash, the cat – pet him"><pre class="cat"> /\_/\
+      <div class="stage-box">
+        <div id="stage" role="img" aria-label="Flash, a black cat with orange eyes, sits next to a laptop that runs Flashcat in a terminal; file icons float above them">
+          <div class="stand-in" aria-hidden="true"><pre class="cat" id="flash-drawn"> /\_/\
 ( <b>o.o</b> )
- &gt; ^ &lt;</pre><span class="zz" aria-hidden="true">z</span><span class="zz" aria-hidden="true">z</span><span class="zz" aria-hidden="true">Z</span></button>
-        <p class="caption" id="caption">This is Flash. Go on, pet him.</p>
+ &gt; ^ &lt;</pre></div>
+        </div>
+        <p class="caption"><span id="caption">This is Flash.</span> <button type="button" id="pet">Go on, pet him.</button></p>
       </div>
     </div>
   </div>
@@ -303,62 +310,69 @@
 
 <main class="wrap">
 
-  <section class="sec" id="synopsis">
-    <h2>SYNOPSIS</h2>
-    <div class="sec-body">
-      <div class="synopsis">
-        <div><b>flashcat</b> [<span class="opt">--continue</span>] [<span class="opt">--model</span> name]</div>
-        <div><b>flashcat</b> "which PDF is the newest invoice?"</div>
-        <div class="pipe">cat log | <b style="color:var(--text)">flashcat</b> "why?"</div>
-      </div>
-      <p class="note" style="font-size:16px">Pick a question and watch Flashcat answer it:</p>
-      <div class="chips" role="group" aria-label="Demo questions">
-        <button type="button" class="chip" data-demo="costs" aria-pressed="true">❯ Show costs.csv as a table …</button>
-        <button type="button" class="chip" data-demo="invoice" aria-pressed="false">❯ which invoice is due first?</button>
-        <button type="button" class="chip" data-demo="plan" aria-pressed="false">❯ /plan, then fix the failing test</button>
-      </div>
-      <div class="demo">
-        <div class="peek-clip" aria-hidden="true"><pre class="cat peek"> /\_/\
+  <section class="sec" id="demo">
+    <div>
+      <p class="eyebrow">01 / watch it work</p>
+      <h2>Ask in <span>plain language.</span></h2>
+    </div>
+    <div class="synopsis">
+      <div><b>flashcat</b> [<span class="opt">--continue</span>] [<span class="opt">--model</span> name]</div>
+      <div><b>flashcat</b> "which PDF is the newest invoice?"</div>
+      <div class="pipe">cat log | <b style="color:var(--text)">flashcat</b> "why?"</div>
+    </div>
+    <p class="note" style="font-size:17px">Pick a question and watch Flashcat answer it:</p>
+    <div class="chips" role="group" aria-label="Demo questions">
+      <button type="button" class="chip" data-demo="costs" aria-pressed="true">❯ Show costs.csv as a table …</button>
+      <button type="button" class="chip" data-demo="invoice" aria-pressed="false">❯ which invoice is due first?</button>
+      <button type="button" class="chip" data-demo="plan" aria-pressed="false">❯ /plan, then fix the failing test</button>
+    </div>
+    <div class="demo">
+      <div class="peek-clip" aria-hidden="true"><pre class="cat peek"> /\_/\
 ( <b>o.o</b> )
  &gt; ^ &lt;</pre></div>
-        <figure class="term">
-          <div class="term-bar" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>flashcat — ~/Documents/flashcat-demo</span></div>
-          <div class="term-body" id="term" aria-live="polite">
-            <noscript><img src="demo.svg" width="785" height="666" alt="Flashcat in the terminal: asked which invoice is due first, it reads two PDF invoices, shows the table it wants to write, writes invoices.md after the user answers y, and answers that the Blue Harbor Hosting invoice is due first"></noscript>
-          </div>
-        </figure>
-      </div>
+      <figure class="term">
+        <div class="term-bar" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>flashcat — ~/Documents/flashcat-demo</span></div>
+        <div class="term-body" id="term" aria-live="polite">
+          <noscript><img src="demo.svg" width="785" height="666" alt="Flashcat in the terminal: asked which invoice is due first, it reads two PDF invoices, shows the table it wants to write, writes invoices.md after the user answers y, and answers that the Blue Harbor Hosting invoice is due first"></noscript>
+        </div>
+      </figure>
     </div>
   </section>
 
-  <section class="sec" id="description">
-    <h2>DESCRIPTION</h2>
-    <div class="sec-body" style="gap:40px">
-      <p class="big">Flashcat works in the folder you start it in. Ask in plain language – it reads, writes and searches for you, and asks before it changes anything.</p>
-      <div class="rows">
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">.md</span>
-          <div><h3>Files</h3><p>List, read, search, create and change text files. Create Word and PDF documents, rename and move files – many at once, undone in one step.</p></div></div>
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">PDF</span>
-          <div><h3>Documents</h3><p>Reads PDF, Word and Excel – even scanned PDFs and images, through the text recognition built into macOS. Searches them for several words at once, so it finds a topic even when the document words it differently.</p></div></div>
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">JPG</span>
-          <div><h3>Images</h3><p>Describes and analyzes the pictures in your folder – and screenshots you paste with <code>Ctrl+V</code>.</p></div></div>
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">&lt;/&gt;</span>
-          <div><h3>Coding</h3><p>Reads, explains, writes and fixes code, and runs your tests and scripts in a sandbox to check its work – you confirm every change and every command. <code>/plan</code> makes it plan first and change nothing; with <code>/test</code> your tests run by themselves after every change. It can't match the big frontier models in the cloud, but it does a solid job on simple tasks, free and fully on your Mac.</p></div></div>
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">WWW</span>
-          <div><h3>Web</h3><p>Searches the web (DuckDuckGo) and reads web pages – only after you say yes.</p></div></div>
-        <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">❯_</span>
-          <div><h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. Paste screenshots with <code>Ctrl+V</code> (they show up as <code>[Image #1]</code>; <code>⌘V</code> works too in terminals like Hyper), drag images in, or ask once without a chat: <code>cat log | flashcat "why?"</code> Long chats are summarized by themselves, <code>/model</code> switches the model, and <code>/command</code> saves your own commands.</p></div></div>
-      </div>
+  <section class="sec" id="features">
+    <div>
+      <p class="eyebrow">02 / what it can do</p>
+      <h2>Works in the folder <span>you start it in.</span></h2>
+    </div>
+    <p class="lead">Flashcat works in the folder you start it in. Ask in plain language – it reads, writes and searches for you, and asks before it changes anything.</p>
+    <div class="rows">
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">.md</span>
+        <div><h3>Files</h3><p>List, read, search, create and change text files. Create Word and PDF documents, rename and move files – many at once, undone in one step.</p></div></div>
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">PDF</span>
+        <div><h3>Documents</h3><p>Reads PDF, Word and Excel – even scanned PDFs and images, through the text recognition built into macOS. Searches them for several words at once, so it finds a topic even when the document words it differently.</p></div></div>
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">JPG</span>
+        <div><h3>Images</h3><p>Describes and analyzes the pictures in your folder – and screenshots you paste with <code>Ctrl+V</code>.</p></div></div>
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">&lt;/&gt;</span>
+        <div><h3>Coding</h3><p>Reads, explains, writes and fixes code, and runs your tests and scripts in a sandbox to check its work – you confirm every change and every command. <code>/plan</code> makes it plan first and change nothing; with <code>/test</code> your tests run by themselves after every change. It can't match the big frontier models in the cloud, but it does a solid job on simple tasks, free and fully on your Mac.</p></div></div>
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">WWW</span>
+        <div><h3>Web</h3><p>Searches the web (DuckDuckGo) and reads web pages – only after you say yes.</p></div></div>
+      <div class="row"><div class="hide" aria-hidden="true"><pre class="cat"></pre></div><span class="ico">❯_</span>
+        <div><h3>Terminal</h3><p>Answers stream live with Markdown, tables and highlighted code. Paste screenshots with <code>Ctrl+V</code> (they show up as <code>[Image #1]</code>; <code>⌘V</code> works too in terminals like Hyper), drag images in, or ask once without a chat: <code>cat log | flashcat "why?"</code> Long chats are summarized by themselves, <code>/model</code> switches the model, and <code>/command</code> saves your own commands.</p></div></div>
     </div>
   </section>
 
   <section class="sec" id="safety">
-    <h2>SAFETY</h2>
-    <div class="sec-body" style="gap:44px">
-      <p class="claim">Enforced by code,<br><span>not by the model.</span></p>
-      <div class="split">
-        <figure class="tree">
-          <figcaption>WHAT FLASHCAT CAN SEE</figcaption>
+    <div>
+      <p class="eyebrow">03 / safety</p>
+      <h2>Enforced by code, <span>not by the model.</span></h2>
+    </div>
+    <div class="split">
+      <figure class="box3d">
+        <div id="sandbox" role="img" aria-label="A glass box with the files of the start folder inside. A glowing dot, a command, bounces around in it and cannot get out. Library, .ssh and .zshrc float outside, locked."></div>
+        <figcaption><b>●</b> a command, in its box: it bounces off the walls of the start folder. What floats outside stays locked.</figcaption>
+      </figure>
+      <figure class="tree">
+        <figcaption>WHAT FLASHCAT CAN SEE</figcaption>
 <div class="home">~/</div>
 <div><span class="start">├── Documents/</span><span class="start">   ← you start Flashcat here</span></div>
 <div>│   ├── invoices/<span class="ok">   ✓ readable</span></div>
@@ -366,21 +380,22 @@
 <div><span class="locked">├── Library/</span><span class="why">         ✕ locked</span></div>
 <div><span class="locked">├── .ssh/</span><span class="why">            ✕ locked · private keys</span></div>
 <div><span class="locked">└── .zshrc</span><span class="why">           ✕ locked · hidden file</span></div>
-        </figure>
-        <ol class="rules">
-          <li><strong>[Y/N]  every change asks first</strong><span>You see a preview – or the full command – before you answer <code>Y</code>. The old version is backed up, and <code>/undo</code> reverts the last change.</span></li>
-          <li><strong>[sandbox]  commands stay in their box</strong><span>Only the start folder and its subfolders. Commands run in a sandbox: no internet, they can only write inside the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone. Only an image you drag or paste in yourself comes from outside.</span></li>
-          <li><strong>[offline]  stays on your Mac</strong><span>The model runs locally in LM Studio, Ollama or llama.cpp. Nothing leaves your computer unless you allow a web request – and you always see the full address first.</span></li>
-        </ol>
-      </div>
-      <p class="note">All details: <a href="https://github.com/TomTomsen765/flashcat#safety">Safety in the README</a> and <a href="https://github.com/TomTomsen765/flashcat/blob/main/SECURITY.md">SECURITY.md</a>. Flashcat is powered by a language model – please double-check important results.</p>
+      </figure>
     </div>
+    <ol class="rules">
+      <li><strong>[Y/N]  every change asks first</strong><span>You see a preview – or the full command – before you answer <code>Y</code>. The old version is backed up, and <code>/undo</code> reverts the last change.</span></li>
+      <li><strong>[sandbox]  commands stay in their box</strong><span>Only the start folder and its subfolders. Commands run in a sandbox: no internet, they can only write inside the folder, and nothing they start keeps running. Git hooks they sneak in are caught and undone. Only an image you drag or paste in yourself comes from outside.</span></li>
+      <li><strong>[offline]  stays on your Mac</strong><span>The model runs locally in LM Studio, Ollama or llama.cpp. Nothing leaves your computer unless you allow a web request – and you always see the full address first.</span></li>
+    </ol>
+    <p class="note">All details: <a href="https://github.com/TomTomsen765/flashcat#safety">Safety in the README</a> and <a href="https://github.com/TomTomsen765/flashcat/blob/main/SECURITY.md">SECURITY.md</a>. Flashcat is powered by a language model – please double-check important results.</p>
   </section>
 
   <section class="sec" id="requirements">
-    <h2>REQUIREMENTS</h2>
-    <div class="sec-body" style="gap:28px">
-      <p class="big">How much memory does your Mac have?</p>
+    <div>
+      <p class="eyebrow">04 / which Mac?</p>
+      <h2>How much memory does <span>your Mac</span> have?</h2>
+    </div>
+    <div class="panel">
       <div class="mems" role="group" aria-label="Memory">
         <button type="button" class="mem" data-gb="16" aria-pressed="false">16 GB</button>
         <button type="button" class="mem" data-gb="24" aria-pressed="true">24 GB</button>
@@ -392,46 +407,46 @@
         <div class="bar-legend"><span>0 GB</span><span id="free">8.4 GB left for macOS and your apps</span><span id="total">24 GB</span></div>
       </div>
       <div class="verdict" aria-live="polite"><b class="okay" id="verdict">okay</b><span id="verdict-text">Close all other apps while you use Flashcat. Otherwise macOS moves parts of the model to disk and answers become much slower.</span></div>
-      <p class="note">Built and tuned on a MacBook Air M5 with 24 GB. Only the M5 is tested so far – older M chips should work too, but answers will be slower. Tried it on another Mac? <a href="https://github.com/TomTomsen765/flashcat/issues">Let me know how it runs.</a></p>
-      <p class="note"><strong style="color:var(--text)">Short on memory?</strong> <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (<code>brew install llama.cpp</code>) is the leanest way to run the model: no app, only the bare model server, which Flashcat starts and stops itself. On my MacBook Air M5 it needed about 1 GB less memory than through LM Studio and answered a bit faster (one short measurement, same model and questions). Choose it with <code>flashcat --backend llamacpp</code>. Already downloaded Gemma 4 in LM Studio? llama.cpp runs those files directly, and Ollama can use them too – no second download.</p>
     </div>
+    <p class="note">Built and tuned on a MacBook Air M5 with 24 GB. Only the M5 is tested so far – older M chips should work too, but answers will be slower. Tried it on another Mac? <a href="https://github.com/TomTomsen765/flashcat/issues">Let me know how it runs.</a></p>
+    <p class="note"><strong style="color:var(--text)">Short on memory?</strong> <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (<code>brew install llama.cpp</code>) is the leanest way to run the model: no app, only the bare model server, which Flashcat starts and stops itself. On my MacBook Air M5 it needed about 1 GB less memory than through LM Studio and answered a bit faster (one short measurement, same model and questions). Choose it with <code>flashcat --backend llamacpp</code>. Already downloaded Gemma 4 in LM Studio? llama.cpp runs those files directly, and Ollama can use them too – no second download.</p>
   </section>
 
   <section class="sec" id="install">
-    <h2>INSTALL</h2>
-    <div class="sec-body">
-      <p class="big">Three steps. No account, no cloud.</p>
-      <ol class="steps">
-        <li><span class="n">1</span><div class="s"><p>Flashcat needs a program that runs the model: <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (recommended – the fastest, needs the least memory), <a href="https://lmstudio.ai/download">LM Studio</a> / <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> or <a href="https://ollama.com">Ollama</a>. Nothing installed yet? With <a href="https://brew.sh">Homebrew</a>, the installer offers to install llama.cpp for you.</p></div></li>
-        <li><span class="n">2</span><div class="s">
-          <p>Run this in the terminal:</p>
-          <div class="shell">
-            <div class="shell-bar">
-              <div class="tabs" role="tablist" aria-label="Install method">
-                <button type="button" class="tab" role="tab" data-tab="curl" aria-selected="true">curl</button>
-                <button type="button" class="tab" role="tab" data-tab="brew" aria-selected="false">homebrew</button>
-              </div>
-              <button type="button" class="copy" id="copy">copy</button>
-            </div>
-            <pre><code id="cmd">curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash</code></pre>
-          </div>
-          <p class="note" id="cmd-note">The installer downloads the default model, Gemma 4 (about 15.6 GB). With llama.cpp it asks first, so you can use a model of your own instead.</p>
-        </div></li>
-        <li><span class="n">3</span><div class="s"><p>Go to a folder and start it: <code class="inline-cmd">cd ~/Documents &amp;&amp; flashcat</code></p></div></li>
-      </ol>
-      <p class="note"><strong style="color:var(--text)">You need</strong> a Mac with Apple Silicon and at least 24 GB of memory, plus Python from Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to get them (<code>xcode-select --install</code>). More than one of them installed? The installer asks once which one to use (change it with <code>flashcat --backend</code>). I use Flashcat with llama.cpp now, because it is fast and leaves the most memory free; before that I used it with LM Studio for a long time, and everything runs great there. llama.cpp is still new in Flashcat, and Ollama still needs to be tested properly – <a href="https://github.com/TomTomsen765/flashcat/issues">let me know how it goes.</a></p>
-      <p class="note">Prefer to read the code before running it? <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a> Update later with <code>flashcat --update</code> (Homebrew: <code>brew upgrade flashcat</code>) – you only get published releases that passed the automated safety tests, and a published release cannot be changed afterwards.</p>
+    <div>
+      <p class="eyebrow">05 / install</p>
+      <h2>Three steps. <span>No account, no cloud.</span></h2>
     </div>
+    <ol class="steps">
+      <li><span class="n">1</span><div class="s"><p>Flashcat needs a program that runs the model: <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (recommended – the fastest, needs the least memory), <a href="https://lmstudio.ai/download">LM Studio</a> / <a href="https://lmstudio.ai/blog/introducing-lm-studio-bionic">LM Studio Bionic</a> or <a href="https://ollama.com">Ollama</a>. Nothing installed yet? With <a href="https://brew.sh">Homebrew</a>, the installer offers to install llama.cpp for you.</p></div></li>
+      <li><span class="n">2</span><div class="s">
+        <p>Run this in the terminal:</p>
+        <div class="shell">
+          <div class="shell-bar">
+            <div class="tabs" role="tablist" aria-label="Install method">
+              <button type="button" class="tab" role="tab" data-tab="curl" aria-selected="true">curl</button>
+              <button type="button" class="tab" role="tab" data-tab="brew" aria-selected="false">homebrew</button>
+            </div>
+            <button type="button" class="copy" id="copy">copy</button>
+          </div>
+          <pre><code id="cmd">curl --proto '=https' --tlsv1.2 -fsSL https://github.com/TomTomsen765/flashcat/releases/latest/download/install.sh | bash</code></pre>
+        </div>
+        <p class="note" id="cmd-note">The installer downloads the default model, Gemma 4 (about 15.6 GB). With llama.cpp it asks first, so you can use a model of your own instead.</p>
+      </div></li>
+      <li><span class="n">3</span><div class="s"><p>Go to a folder and start it: <code class="inline-cmd">cd ~/Documents &amp;&amp; flashcat</code></p></div></li>
+    </ol>
+    <p class="note"><strong style="color:var(--text)">You need</strong> a Mac with Apple Silicon and at least 24 GB of memory, plus Python from Apple's free command line tools – most Macs already have them, and if not, the installer tells you how to get them (<code>xcode-select --install</code>). More than one of them installed? The installer asks once which one to use (change it with <code>flashcat --backend</code>). I use Flashcat with llama.cpp now, because it is fast and leaves the most memory free; before that I used it with LM Studio for a long time, and everything runs great there. llama.cpp is still new in Flashcat, and Ollama still needs to be tested properly – <a href="https://github.com/TomTomsen765/flashcat/issues">let me know how it goes.</a></p>
+    <p class="note">Prefer to read the code before running it? <a href="https://github.com/TomTomsen765/flashcat#prefer-to-read-the-code-before-running-it">Here is how.</a> Update later with <code>flashcat --update</code> (Homebrew: <code>brew upgrade flashcat</code>) – you only get published releases that passed the automated safety tests, and a published release cannot be changed afterwards.</p>
   </section>
 
   <section class="sec">
-    <h2>NAMED AFTER</h2>
-    <div class="sec-body">
+    <div>
+      <p class="eyebrow">named after</p>
       <div class="named">
         <pre class="cat" id="sleeper" aria-hidden="true"> /\_/\
 ( <b>-.-</b> )
  &gt; ^ &lt;</pre>
-        <p class="big">Flash, my cat.<br><span>Currently asleep.</span></p>
+        <p>Flash, my cat.<br><span>Currently asleep.</span></p>
       </div>
     </div>
   </section>
@@ -439,9 +454,8 @@
 
 <footer>
   <div class="wrap">
-    <span><a href="https://github.com/TomTomsen765/flashcat">GitHub</a> · <a href="https://github.com/TomTomsen765/flashcat/blob/main/LICENSE">MIT License</a></span>
+    <span><a href="https://github.com/TomTomsen765/flashcat">GitHub</a> · <a href="https://github.com/TomTomsen765/flashcat/blob/main/LICENSE">MIT License</a> · 3D with <a href="https://threejs.org">three.js</a> (<a href="vendor/three.LICENSE">MIT</a>, served from this site)</span>
     <span>Gemma is made by Google and has its own terms of use.</span>
-    <span>FLASHCAT(1)</span>
   </div>
 </footer>
 
@@ -462,59 +476,18 @@
   const setEyes = (el, eyes) => { el.querySelector("b").textContent = eyes; };
   const blink = (el, eyes, ms) => { setEyes(el, eyes); setTimeout(() => setEyes(el, el.dataset.eyes), ms); };
 
-  // ---------- Flash, the big cat: follows the mouse, blinks, purrs when petted ----------
-  const flashBtn = document.getElementById("flash");
-  const flash = flashBtn.querySelector(".cat");
-  let look = 1;
-  flash.dataset.eyes = awake;
-  flash.innerHTML = face(awake);
+  // ---------- Flash in 3D lives in scene.js; here: his drawn stand-in and what happens when he is petted ----------
+  document.getElementById("flash-drawn").innerHTML = face(awake);
   if (night) document.getElementById("caption").textContent = "Flash is asleep. It is late.";
-  if (!reduced && !night) {
-    addEventListener("pointermove", e => {
-      const r = flash.getBoundingClientRect();
-      const x = e.clientX - (r.left + r.width / 2);
-      const next = x < -160 ? 0 : x > 160 ? 2 : 1;
-      if (next !== look) {
-        look = next;
-        flash.innerHTML = face(flash.querySelector("b").textContent, [look, 2 - look]);
-      }
-    });
-  }
-  (function blinkFlash() {
-    setTimeout(() => {
-      if (night) blink(flash, pick(["o.-", "-.o"]), 600);
-      else blink(flash, "-.-", 150);
-      blinkFlash();
-    }, rand(2500, 6000));
-  })();
-  flashBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    blink(flash, "^.^", 1200);
-    const r = flashBtn.getBoundingClientRect();
-    for (let i = 0; i < 6; i++) setTimeout(() => spawn(r.left + r.width / 2 + rand(-80, 80), r.top + rand(0, 40), "purr"), i * 90);
+  addEventListener("flash-purr", e => {
+    for (let i = 0; i < 6; i++) setTimeout(() => spawn(e.detail.x + rand(-80, 80), e.detail.y + rand(-30, 20), "purr"), i * 90);
   });
-
-  // ---------- the sky: little cats drifting behind the man page ----------
-  const sky = document.getElementById("sky");
-  const skyCats = [];
-  const count = Math.max(12, Math.min(40, Math.round(innerWidth * innerHeight / 46000)));
-  for (let i = 0; i < count; i++) {
-    const c = document.createElement("pre");
-    c.className = "cat";
-    const eyes = night ? "-.-" : pick(["o.o", "o.o", "o.o", "^.^", "O.O", "o.o"]);
-    c.dataset.eyes = eyes;
-    c.innerHTML = face(eyes);
-    const size = rand(9, 24);
-    c.style.cssText = `left:${rand(-3, 97)}%;top:${rand(-3, 97)}%;--s:${size}px;--o:${(0.05 + size / 24 * 0.14).toFixed(3)};` +
-      `--d:${rand(9, 22)}s;--delay:${-rand(0, 20)}s;--dx:${rand(-60, 60)}px;--dy:${rand(-70, 70)}px;` +
-      `--r1:${rand(-14, 14)}deg;--r2:${rand(-14, 14)}deg`;
-    sky.appendChild(c);
-    skyCats.push(c);
-  }
-  if (!reduced) setInterval(() => {
-    const c = pick(skyCats);
-    night ? blink(c, pick(["o.-", "-.o"]), 500) : blink(c, pick(["-.-", "-.-", "o.-", "^.^"]), 180);
-  }, 300);
+  document.getElementById("pet").addEventListener("click", e => {
+    if (document.documentElement.classList.contains("three")) return;   // the 3D cat answers itself
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    dispatchEvent(new CustomEvent("flash-purr", { detail: { x: r.left + r.width / 2, y: r.top - 40 } }));
+  });
 
   // ---------- cats that peek over the demo and climb up behind the rows ----------
   document.querySelectorAll(".peek, .hide .cat").forEach(c => {
@@ -730,5 +703,6 @@
   });
 })();
 </script>
+<script type="module" src="scene.js"></script>
 </body>
 </html>
